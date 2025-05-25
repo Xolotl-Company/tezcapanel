@@ -52,27 +52,27 @@ export default function LoginPage() {
             Login
           </h1>
           <div>
+            <label htmlFor="email" className="block text-white font-poppins mb-2">Correo electrónico</label>
             <input
               id="email"
               type="email"
               value={email}
               onChange={e => setEmail(e.target.value)}
-              className="w-full px-4 py-3 rounded-lg bg-white/10 border border-white/20 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-[#70F6F7] transition-all"
+              className="w-full px-4 py-3 rounded-lg bg-white/10 border border-white/20 text-white focus:outline-none focus:ring-2 focus:ring-[#70F6F7] transition-all"
               required
               autoComplete="username"
-              placeholder="Ingresa tu correo"
             />
           </div>
           <div>
-           <input
+            <label htmlFor="password" className="block text-white font-poppins mb-2">Contraseña</label>
+            <input
               id="password"
               type="password"
               value={password}
               onChange={e => setPassword(e.target.value)}
-              className="w-full px-4 py-3 rounded-lg bg-white/10 border border-white/20 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-[#70F6F7] transition-all"
+              className="w-full px-4 py-3 rounded-lg bg-white/10 border border-white/20 text-white focus:outline-none focus:ring-2 focus:ring-[#70F6F7] transition-all"
               required
               autoComplete="current-password"
-              placeholder="Ingresa tu contraseña"
             />
           </div>
           <div className="flex items-center justify-between mb-2">

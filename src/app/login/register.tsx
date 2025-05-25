@@ -9,7 +9,6 @@ import { useState } from "react";
 export default function RegisterPage() {
 
   const [nombre, setNombre] = useState("");
-  const [apellidos, setApellidos] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
@@ -57,7 +56,8 @@ export default function RegisterPage() {
             Registro
           </h1>
           <div className="flex gap-[15px]">
-            <div className="w-1/2" style={{ marginRight: '10px' }}>
+            <div className="w-full">
+              <label htmlFor="nombre" className="block text-white font-poppins mb-2">Nombre</label>
               <input
                 id="nombre"
                 type="text"
@@ -66,23 +66,11 @@ export default function RegisterPage() {
                 className="w-full px-4 py-3 rounded-lg bg-white/10 border border-white/20 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-[#70F6F7] transition-all"
                 required
                 autoComplete="given-name"
-                placeholder="Ingresa tu nombre"
-              />
-            </div>
-            <div className="w-1/2">
-             <input
-                id="apellidos"
-                type="text"
-                value={apellidos}
-                onChange={e => setApellidos(e.target.value)}
-                className="w-full px-4 py-3 rounded-lg bg-white/10 border border-white/20 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-[#70F6F7] transition-all"
-                required
-                autoComplete="family-name"
-                placeholder="Ingresa apellidos"
               />
             </div>
           </div>
           <div>
+            <label htmlFor="email" className="block text-white font-poppins mb-2">Correo electrónico</label>
             <input
               id="email"
               type="email"
@@ -91,11 +79,11 @@ export default function RegisterPage() {
               className="w-full px-4 py-3 rounded-lg bg-white/10 border border-white/20 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-[#70F6F7] transition-all"
               required
               autoComplete="username"
-              placeholder="Ingresa tu correo"
             />
           </div>
           <div>
-           <input
+            <label htmlFor="password" className="block text-white font-poppins mb-2">Contraseña</label>
+            <input
               id="password"
               type="password"
               value={password}
@@ -103,7 +91,6 @@ export default function RegisterPage() {
               className="w-full px-4 py-3 rounded-lg bg-white/10 border border-white/20 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-[#70F6F7] transition-all"
               required
               autoComplete="new-password"
-              placeholder="Crea una contraseña"
             />
           </div>
           
