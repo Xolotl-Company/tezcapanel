@@ -71,19 +71,77 @@ export default function AIPage() {
   }
 
   async function handleConfirmActions(messageId: string, actions: ProposedAction[]) {
-    // Marcar acciones como ejecutadas en el mensaje
+  // Si no hay acciones es una cancelación
+  if (actions.length === 0) {
     updateMessage(messageId, { actionsExecuted: true })
+    return
+  }
+  updateMessage(messageId, { actionsExecuted: true })
+  setLoading(true)
+  // ... resto igual
 
-    // Notificar al asistente que las acciones fueron aprobadas
-    // En Commit 5 esto llamará al agente real para ejecutarlas (se usará actions param)
-    void actions // Silenciar ESLint - se usará en Commit 5
-    const confirmMsg = `He confirmado las acciones propuestas. (Nota: la ejecución real de comandos en el servidor estará disponible en la próxima versión del panel.)`
-    await sendMessage(confirmMsg)
+    const executingId = generateId()
+    addMessage({
+      id: executingId,
+      role: "assistant",
+      content: "⏳ Ejecutando acciones en el servidor...",
+      timestamp: new Date(),
+    })
+
+    try {
+      const res = await fetch("/api/agent/execute", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          commands: actions.map((a) => a.command),
+          actionLabels: actions.map((a) => a.label),
+        }),
+      })
+
+      const data = await res.json()
+
+      if (data.error === "agent_unavailable") {
+        updateMessage(executingId, {
+          content: "❌ El agente no está disponible. Verifica que `tezcaagent` esté corriendo.",
+          timestamp: new Date(),
+        })
+        setLoading(false)
+        return
+      }
+
+      const results = data.results ?? []
+      const allSuccess = results.every((r: { success: boolean }) => r.success)
+
+      const resultSummary = results
+        .map((r: { command: string; success: boolean; stdout: string; stderr: string; error?: string }) =>
+          `${r.success ? "✔" : "✖"} \`${r.command}\`${r.stdout ? `\n   ${r.stdout.slice(0, 200)}` : ""}${r.error ? `\n   Error: ${r.error}` : ""}`
+        )
+        .join("\n")
+
+      updateMessage(executingId, {
+        content: allSuccess
+          ? `✅ Todas las acciones ejecutadas correctamente:\n\n${resultSummary}`
+          : `⚠️ Algunas acciones fallaron:\n\n${resultSummary}`,
+        timestamp: new Date(),
+      })
+
+      const followUpMsg = allSuccess
+        ? `Las acciones se ejecutaron exitosamente. Resultados: ${resultSummary}. Dame un resumen de lo que se hizo y próximos pasos si aplican.`
+        : `Algunas acciones fallaron. Resultados: ${resultSummary}. Explícame qué salió mal y cómo solucionarlo.`
+
+      await sendMessage(followUpMsg)
+    } catch {
+      updateMessage(executingId, {
+        content: "❌ Error al ejecutar las acciones. Intenta de nuevo.",
+        timestamp: new Date(),
+      })
+    } finally {
+      setLoading(false)
+    }
   }
 
   return (
     <div className="flex flex-col h-[calc(100vh-8rem)] max-w-3xl mx-auto">
-      {/* Header */}
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-3">
           <div className="w-8 h-8 rounded-lg bg-primary/10 border border-primary/20 flex items-center justify-center">
@@ -110,7 +168,6 @@ export default function AIPage() {
         )}
       </div>
 
-      {/* Chat area */}
       <div className="flex-1 bg-background border border-border rounded-lg overflow-hidden flex flex-col">
         <div className="flex-1 overflow-y-auto">
           {messages.length === 0 ? (

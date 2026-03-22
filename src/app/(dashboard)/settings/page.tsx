@@ -1,3 +1,4 @@
+import { AuditLogSection } from "@/components/dashboard/audit-log"
 import { auth } from "@/lib/auth"
 import { Badge } from "@/components/ui/badge"
 import { Separator } from "@/components/ui/separator"
@@ -53,6 +54,7 @@ export default async function SettingsPage() {
           </p>
         </div>
       </div>
+    <AuditLogSection />
     </div>
   )
 }

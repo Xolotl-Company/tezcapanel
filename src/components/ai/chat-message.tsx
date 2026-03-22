@@ -92,9 +92,14 @@ export function ChatMessageItem({ message, onConfirmActions }: ChatMessageProps)
                 <CheckCircle2 className="w-3 h-3 mr-1" />
                 Confirmar y ejecutar
               </Button>
-              <Button size="sm" variant="ghost" className="h-7 text-xs text-muted-foreground">
+             <Button
+                size="sm"
+                variant="ghost"
+                className="h-7 text-xs text-muted-foreground"
+                onClick={() => onConfirmActions?.(message.id, [])}
+            >
                 Cancelar
-              </Button>
+                </Button>
             </div>
           </div>
         )}

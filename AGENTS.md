@@ -1,480 +1,534 @@
-# Tezcapanel — Agent Instructions (Commit 4)
+# Tezcapanel — Agent Instructions (Commit 5)
 
 ## Objetivo
 
-Implementar el módulo de IA Pro — un asistente con Claude integrado directamente en el panel
-que puede diagnosticar problemas, responder preguntas, y proponer acciones ejecutables en el
-servidor con aprobación del usuario.
+Implementar la ejecución real de comandos en el servidor desde Byte AI.
+El botón "Confirmar y ejecutar" debe llamar al agente Node.js, ejecutar los comandos
+aprobados, y reportar el resultado en el chat en tiempo real.
 
 ---
 
 ## Contexto
 
 - **Stack:** Next.js 15, TypeScript, Tailwind CSS, shadcn/ui, NextAuth v5, Prisma + SQLite, Zustand
-- **API IA:** Anthropic API (`@anthropic-ai/sdk`) — modelo `claude-opus-4-5`
-- **Agente Node.js:** corre en puerto 7070, expone `/metrics` y `/services`
-- **Commits anteriores:** dashboard con métricas reales, sidebar funcional, auth con DB
+- **Agente:** Node.js en `/agent/server.js`, puerto 7070
+- **Commits anteriores:** Byte AI funcional con Haiku, propone acciones pero no las ejecuta aún
+- **IMPORTANTE:** La ejecución de comandos debe ser segura — lista blanca estricta,
+  nunca ejecutar comandos arbitrarios del usuario directamente.
 
 ---
 
-## Paso 1 — Instalar dependencia
+## Parte 1 — Actualizar el agente Node.js
 
-```bash
-npm install @anthropic-ai/sdk
-```
+### `agent/server.js` — REEMPLAZAR COMPLETO
 
-Agregar al `.env`:
-```env
-ANTHROPIC_API_KEY="tu_api_key_de_anthropic"
+```js
+const http = require("http")
+const { exec } = require("child_process")
+const si = require("systeminformation")
+
+const PORT = 7070
+const HOST = "127.0.0.1"
+const TOKEN = process.env.AGENT_TOKEN
+
+if (!TOKEN) {
+  console.error("❌ AGENT_TOKEN no definido")
+  process.exit(1)
+}
+
+// --- Lista blanca de comandos permitidos ---
+// NUNCA ejecutar comandos arbitrarios — solo los de esta lista
+const ALLOWED_COMMANDS = [
+  // Gestión de paquetes
+  /^apt(-get)? (install|remove|update|upgrade) -y [\w\s\-\.]+$/,
+  /^apt(-get)? install -y [\w\s\-\.]+$/,
+  /^yum (install|remove|update) -y [\w\s\-\.]+$/,
+  /^dnf (install|remove|update) -y [\w\s\-\.]+$/,
+
+  // Systemctl
+  /^systemctl (start|stop|restart|reload|enable|disable|status) [\w\-\.]+$/,
+
+  // Nginx
+  /^nginx -t$/,
+  /^nginx -s reload$/,
+
+  // MySQL / MariaDB
+  /^mysql -e "CREATE DATABASE [\w]+ CHARACTER SET utf8mb4"$/,
+  /^mysql -e "CREATE USER '[\w]+'@'localhost' IDENTIFIED BY '[^']+'"$/,
+  /^mysql -e "GRANT ALL ON [\w]+\.\* TO '[\w]+'@'localhost'"$/,
+  /^mysql -e "FLUSH PRIVILEGES"$/,
+  /^mysqldump [\w\s\-\.]+ > [\w\/\-\.]+$/,
+
+  // Certbot / SSL
+  /^certbot --nginx -d [\w\.\-]+ --non-interactive --agree-tos -m [\w@\.\-]+$/,
+  /^certbot renew --dry-run$/,
+  /^certbot renew$/,
+
+  // Archivos de configuración (solo escritura en paths permitidos)
+  /^mkdir -p \/etc\/(nginx|apache2|mysql|postfix)\//,
+  /^mkdir -p \/var\/www\/[\w\-\.]+$/,
+  /^chown -R www-data:www-data \/var\/www\/[\w\-\.]+$/,
+  /^chmod -R 755 \/var\/www\/[\w\-\.]+$/,
+
+  // Información del sistema (solo lectura)
+  /^cat \/var\/log\/(nginx|apache2|mysql|syslog|auth\.log)(\/[\w\-\.]+)?$/,
+  /^tail -n \d+ \/var\/log\/(nginx|apache2|mysql|syslog|auth\.log)(\/[\w\-\.]+)?$/,
+  /^df -h$/,
+  /^free -h$/,
+  /^top -bn1$/,
+  /^ps aux$/,
+  /^netstat -tlnp$/,
+  /^ss -tlnp$/,
+
+  // ufw firewall
+  /^ufw (enable|disable|status|allow|deny) ?[\w\/]*$/,
+
+  // wget / curl para descargas estándar
+  /^wget -O [\w\/\-\.]+ https:\/\/[\w\.\-\/\?=&]+$/,
+]
+
+function isCommandAllowed(command) {
+  return ALLOWED_COMMANDS.some((pattern) => pattern.test(command.trim()))
+}
+
+function executeCommand(command, timeout = 30000) {
+  return new Promise((resolve, reject) => {
+    if (!isCommandAllowed(command)) {
+      reject(new Error(`Comando no permitido: ${command}`))
+      return
+    }
+
+    exec(command, { timeout, maxBuffer: 1024 * 1024 }, (error, stdout, stderr) => {
+      if (error && error.killed) {
+        reject(new Error("Comando excedió el tiempo límite"))
+        return
+      }
+      resolve({
+        success: !error,
+        stdout: stdout?.trim() ?? "",
+        stderr: stderr?.trim() ?? "",
+        exitCode: error?.code ?? 0,
+      })
+    })
+  })
+}
+
+// --- Auth ---
+function isAuthorized(req) {
+  const auth = req.headers["authorization"] ?? ""
+  return auth === `Bearer ${TOKEN}`
+}
+
+// --- Headers ---
+function setHeaders(res) {
+  res.setHeader("Content-Type", "application/json")
+  res.setHeader("Access-Control-Allow-Origin", "http://localhost:3000")
+  res.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type")
+}
+
+// --- Handlers ---
+async function handleMetrics(res) {
+  const [cpuData, cpuLoad, mem, disk, osInfo] = await Promise.all([
+    si.cpu(),
+    si.currentLoad(),
+    si.mem(),
+    si.fsSize(),
+    si.osInfo(),
+  ])
+
+  const rootDisk = disk.find((d) => d.mount === "/") ?? disk[0] ?? {}
+
+  const metrics = {
+    cpu: {
+      usage: parseFloat((cpuLoad.currentLoad ?? 0).toFixed(1)),
+      cores: cpuData.cores ?? 1,
+      model: `${cpuData.manufacturer} ${cpuData.brand}`.trim() || "Unknown",
+    },
+    memory: {
+      total: mem.total ?? 0,
+      used: mem.used ?? 0,
+      free: mem.free ?? 0,
+    },
+    disk: {
+      total: rootDisk.size ?? 0,
+      used: rootDisk.used ?? 0,
+      free: (rootDisk.size ?? 0) - (rootDisk.used ?? 0),
+    },
+    uptime: Math.floor(si.time().uptime ?? 0),
+    hostname: osInfo.hostname ?? "localhost",
+    os: `${osInfo.distro ?? osInfo.platform} ${osInfo.release ?? ""}`.trim(),
+  }
+
+  res.end(JSON.stringify(metrics))
+}
+
+async function handleServices(res) {
+  const processes = await si.processes()
+  const running = new Set(processes.list.map((p) => p.name.toLowerCase()))
+
+  const targets = [
+    { name: "nginx",   check: "nginx" },
+    { name: "mysql",   check: "mysqld" },
+    { name: "postfix", check: "postfix" },
+    { name: "named",   check: "named" },
+  ]
+
+  const services = targets.map(({ name, check }) => ({
+    name,
+    status: running.has(check) ? "running" : "stopped",
+  }))
+
+  res.end(JSON.stringify(services))
+}
+
+async function handleExecute(req, res) {
+  let body = ""
+  req.on("data", (chunk) => { body += chunk })
+  req.on("end", async () => {
+    try {
+      const { commands } = JSON.parse(body)
+
+      if (!Array.isArray(commands) || commands.length === 0) {
+        res.writeHead(400)
+        res.end(JSON.stringify({ error: "commands array requerido" }))
+        return
+      }
+
+      if (commands.length > 10) {
+        res.writeHead(400)
+        res.end(JSON.stringify({ error: "máximo 10 comandos por ejecución" }))
+        return
+      }
+
+      const results = []
+
+      for (const command of commands) {
+        if (typeof command !== "string") {
+          results.push({ command, success: false, error: "comando inválido" })
+          continue
+        }
+
+        try {
+          const result = await executeCommand(command)
+          results.push({ command, ...result })
+
+          // Si un comando falla, detener la cadena
+          if (!result.success) {
+            results.push({
+              command: "(detenido)",
+              success: false,
+              error: "Ejecución detenida por error en comando anterior",
+            })
+            break
+          }
+        } catch (err) {
+          results.push({
+            command,
+            success: false,
+            error: err.message,
+            stdout: "",
+            stderr: "",
+          })
+          break
+        }
+      }
+
+      res.end(JSON.stringify({ results }))
+    } catch {
+      res.writeHead(400)
+      res.end(JSON.stringify({ error: "JSON inválido" }))
+    }
+  })
+}
+
+async function handleRestartService(name, res) {
+  const allowed = ["nginx", "mysql", "mariadb", "postfix", "named", "apache2"]
+  if (!allowed.includes(name)) {
+    res.writeHead(400)
+    res.end(JSON.stringify({ error: "servicio no permitido" }))
+    return
+  }
+
+  try {
+    const result = await executeCommand(`systemctl restart ${name}`)
+    res.end(JSON.stringify(result))
+  } catch (err) {
+    res.writeHead(500)
+    res.end(JSON.stringify({ error: err.message }))
+  }
+}
+
+// --- Router ---
+const server = http.createServer(async (req, res) => {
+  setHeaders(res)
+
+  if (req.method === "OPTIONS") {
+    res.writeHead(204)
+    res.end()
+    return
+  }
+
+  if (!isAuthorized(req)) {
+    res.writeHead(401)
+    res.end(JSON.stringify({ error: "unauthorized" }))
+    return
+  }
+
+  const url = req.url ?? "/"
+  const method = req.method ?? "GET"
+
+  try {
+    if (method === "GET" && url === "/health") {
+      res.end(JSON.stringify({ status: "ok", version: "0.2.0" }))
+    } else if (method === "GET" && url === "/metrics") {
+      await handleMetrics(res)
+    } else if (method === "GET" && url === "/services") {
+      await handleServices(res)
+    } else if (method === "POST" && url === "/execute") {
+      await handleExecute(req, res)
+    } else if (method === "POST" && url.startsWith("/services/") && url.endsWith("/restart")) {
+      const name = url.split("/")[2]
+      await handleRestartService(name, res)
+    } else {
+      res.writeHead(404)
+      res.end(JSON.stringify({ error: "not found" }))
+    }
+  } catch (err) {
+    console.error("Agent error:", err)
+    res.writeHead(500)
+    res.end(JSON.stringify({ error: "internal error" }))
+  }
+})
+
+server.listen(PORT, HOST, () => {
+  console.log(`✔ tezcaagent v0.2.0 escuchando en http://${HOST}:${PORT}`)
+})
 ```
 
 ---
 
-## Paso 2 — Tipos para el módulo IA
+## Parte 2 — API Route de ejecución en Next.js
 
-### `src/types/ai.ts` — CREAR
-
-```typescript
-export interface ChatMessage {
-  id: string
-  role: "user" | "assistant"
-  content: string
-  timestamp: Date
-  actions?: ProposedAction[]
-  actionsExecuted?: boolean
-}
-
-export interface ProposedAction {
-  id: string
-  label: string
-  description: string
-  command: string
-  risk: "low" | "medium" | "high"
-  confirmed?: boolean
-}
-
-export interface ServerContext {
-  hostname: string
-  os: string
-  cpu: { usage: number; cores: number; model: string }
-  memory: { total: number; used: number; free: number }
-  disk: { total: number; used: number; free: number }
-  uptime: number
-  services: { name: string; status: string }[]
-}
-```
-
----
-
-## Paso 3 — Store del chat
-
-### `src/store/chat.store.ts` — CREAR
-
-```typescript
-import { create } from "zustand"
-import type { ChatMessage } from "@/types/ai"
-
-interface ChatState {
-  messages: ChatMessage[]
-  isLoading: boolean
-  addMessage: (message: ChatMessage) => void
-  updateMessage: (id: string, updates: Partial<ChatMessage>) => void
-  setLoading: (loading: boolean) => void
-  clearMessages: () => void
-}
-
-export const useChatStore = create<ChatState>((set) => ({
-  messages: [],
-  isLoading: false,
-  addMessage: (message) =>
-    set((state) => ({ messages: [...state.messages, message] })),
-  updateMessage: (id, updates) =>
-    set((state) => ({
-      messages: state.messages.map((m) => (m.id === id ? { ...m, ...updates } : m)),
-    })),
-  setLoading: (isLoading) => set({ isLoading }),
-  clearMessages: () => set({ messages: [] }),
-}))
-```
-
----
-
-## Paso 4 — API Route de IA
-
-### `src/app/api/ai/chat/route.ts` — CREAR
+### `src/app/api/agent/execute/route.ts` — CREAR
 
 ```typescript
 import { auth } from "@/lib/auth"
 import { NextRequest, NextResponse } from "next/server"
-import Anthropic from "@anthropic-ai/sdk"
-import type { ServerContext } from "@/types/ai"
-
-const anthropic = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY,
-})
+import { prisma } from "@/lib/prisma"
 
 const AGENT_URL = process.env.AGENT_URL ?? "http://127.0.0.1:7070"
 const AGENT_TOKEN = process.env.AGENT_TOKEN ?? ""
-
-async function getServerContext(): Promise<ServerContext | null> {
-  try {
-    const [metricsRes, servicesRes] = await Promise.all([
-      fetch(`${AGENT_URL}/metrics`, {
-        headers: { Authorization: `Bearer ${AGENT_TOKEN}` },
-        signal: AbortSignal.timeout(3000),
-      }),
-      fetch(`${AGENT_URL}/services`, {
-        headers: { Authorization: `Bearer ${AGENT_TOKEN}` },
-        signal: AbortSignal.timeout(3000),
-      }),
-    ])
-    const metrics = await metricsRes.json()
-    const services = await servicesRes.json()
-    return { ...metrics, services }
-  } catch {
-    return null
-  }
-}
-
-function buildSystemPrompt(context: ServerContext | null): string {
-  const contextStr = context
-    ? `
-## Estado actual del servidor
-
-- **Hostname:** ${context.hostname}
-- **OS:** ${context.os}
-- **CPU:** ${context.cpu.usage.toFixed(1)}% uso, ${context.cpu.cores} núcleos (${context.cpu.model})
-- **RAM:** ${(context.memory.used / 1024 / 1024 / 1024).toFixed(1)} GB usados de ${(context.memory.total / 1024 / 1024 / 1024).toFixed(1)} GB
-- **Disco:** ${(context.disk.used / 1024 / 1024 / 1024).toFixed(1)} GB usados de ${(context.disk.total / 1024 / 1024 / 1024).toFixed(1)} GB
-- **Uptime:** ${Math.floor(context.uptime / 86400)}d ${Math.floor((context.uptime % 86400) / 3600)}h
-- **Servicios:**
-${context.services.map((s) => `  - ${s.name}: ${s.status}`).join("\n")}
-`
-    : "\n## Estado del servidor: No disponible (agente desconectado)\n"
-
-  return `Eres el asistente de IA integrado en Tezcapanel, un panel de administración de servidores Linux.
-Tu nombre es Tezca. Eres experto en administración de servidores Linux, Nginx, Apache, MySQL, DNS, correo electrónico y seguridad.
-
-Tienes acceso al estado en tiempo real del servidor donde está instalado Tezcapanel.
-${contextStr}
-
-## Tu comportamiento
-
-1. **Responde en español** siempre, de forma clara y concisa.
-2. **Usa el contexto del servidor** para dar respuestas específicas y relevantes.
-3. **Cuando el usuario pida ejecutar algo**, propón las acciones en formato JSON estructurado
-   al final de tu respuesta usando este formato exacto:
-
-\`\`\`json
-{
-  "actions": [
-    {
-      "id": "action_1",
-      "label": "Instalar Nginx",
-      "description": "Instala nginx via apt y lo habilita como servicio",
-      "command": "apt install -y nginx && systemctl enable nginx && systemctl start nginx",
-      "risk": "low"
-    }
-  ]
-}
-\`\`\`
-
-4. **Niveles de riesgo:**
-   - \`low\`: operaciones de lectura, instalaciones estándar
-   - \`medium\`: cambios de configuración, reinicios de servicios
-   - \`high\`: eliminación de datos, cambios en firewall, modificaciones críticas
-
-5. **NUNCA ejecutes nada sin proponer las acciones primero** — el usuario debe aprobar.
-6. **Si detectas problemas** en el estado del servidor (RAM alta, disco lleno, servicios caídos),
-   mencionalo proactivamente.
-7. **Sé conciso** — respuestas cortas y al punto. Usa markdown para formatear código.
-
-## Restricciones
-- No propongas acciones que puedan dañar irreversiblemente el servidor sin advertencia clara.
-- No compartas el AGENT_TOKEN ni el AUTH_SECRET bajo ninguna circunstancia.
-- Si no sabes algo, dilo — no inventes comandos.`
-}
 
 export async function POST(req: NextRequest) {
   const session = await auth()
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
 
-  const { messages } = await req.json()
+  const { commands, actionLabels } = await req.json()
 
-  const context = await getServerContext()
-  const systemPrompt = buildSystemPrompt(context)
+  if (!Array.isArray(commands) || commands.length === 0) {
+    return NextResponse.json({ error: "commands requerido" }, { status: 400 })
+  }
 
-  const response = await anthropic.messages.create({
-    model: "claude-opus-4-5",
-    max_tokens: 1024,
-    system: systemPrompt,
-    messages: messages.map((m: { role: string; content: string }) => ({
-      role: m.role as "user" | "assistant",
-      content: m.content,
-    })),
+  // Registrar en audit log antes de ejecutar
+  await prisma.auditLog.create({
+    data: {
+      userId: session.user.id,
+      action: "execute_commands",
+      target: actionLabels?.join(", ") ?? commands.join(", "),
+      metadata: JSON.stringify({ commands }),
+    },
   })
 
-  const content = response.content[0]
-  if (content.type !== "text") {
-    return NextResponse.json({ error: "Unexpected response type" }, { status: 500 })
+  try {
+    const res = await fetch(`${AGENT_URL}/execute`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${AGENT_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ commands }),
+      signal: AbortSignal.timeout(60000), // 60s para comandos largos
+    })
+
+    const data = await res.json()
+    return NextResponse.json(data)
+  } catch {
+    return NextResponse.json({ error: "agent_unavailable" }, { status: 503 })
   }
-
-  // Extraer acciones propuestas del JSON en la respuesta
-  let actions = null
-  let text = content.text
-
-  const jsonMatch = text.match(/```json\n([\s\S]*?)\n```/)
-  if (jsonMatch) {
-    try {
-      const parsed = JSON.parse(jsonMatch[1])
-      if (parsed.actions) {
-        actions = parsed.actions
-        // Remover el bloque JSON del texto visible
-        text = text.replace(/```json\n[\s\S]*?\n```/, "").trim()
-      }
-    } catch {
-      // Si no parsea, dejamos el texto como está
-    }
-  }
-
-  return NextResponse.json({ text, actions })
 }
 ```
 
 ---
 
-## Paso 5 — Componentes del chat
+## Parte 3 — Actualizar el chat para ejecutar acciones reales
 
-### `src/components/ai/chat-message.tsx` — CREAR
+### `src/app/(dashboard)/ai/page.tsx` — Modificar función `handleConfirmActions`
+
+Buscar esta función:
+
+```typescript
+async function handleConfirmActions(messageId: string, actions: ProposedAction[]) {
+  updateMessage(messageId, { actionsExecuted: true })
+  const confirmMsg = `He confirmado las acciones propuestas. (Nota: la ejecución real de comandos en el servidor estará disponible en la próxima versión del panel.)`
+  await sendMessage(confirmMsg)
+}
+```
+
+Reemplazar con:
+
+```typescript
+async function handleConfirmActions(messageId: string, actions: ProposedAction[]) {
+  updateMessage(messageId, { actionsExecuted: true })
+  setLoading(true)
+
+  const executingId = generateId()
+  addMessage({
+    id: executingId,
+    role: "assistant",
+    content: "⏳ Ejecutando acciones en el servidor...",
+    timestamp: new Date(),
+  })
+
+  try {
+    const res = await fetch("/api/agent/execute", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        commands: actions.map((a) => a.command),
+        actionLabels: actions.map((a) => a.label),
+      }),
+    })
+
+    const data = await res.json()
+
+    if (data.error === "agent_unavailable") {
+      updateMessage(executingId, {
+        content: "❌ El agente no está disponible. Verifica que `tezcaagent` esté corriendo.",
+        timestamp: new Date(),
+      })
+      setLoading(false)
+      return
+    }
+
+    // Construir reporte de resultados
+    const results = data.results ?? []
+    const allSuccess = results.every((r: { success: boolean }) => r.success)
+
+    const resultSummary = results
+      .map((r: { command: string; success: boolean; stdout: string; stderr: string; error?: string }) =>
+        `${r.success ? "✔" : "✖"} \`${r.command}\`${r.stdout ? `\n   ${r.stdout.slice(0, 200)}` : ""}${r.error ? `\n   Error: ${r.error}` : ""}`
+      )
+      .join("\n")
+
+    updateMessage(executingId, {
+      content: allSuccess
+        ? `✅ Todas las acciones ejecutadas correctamente:\n\n${resultSummary}`
+        : `⚠️ Algunas acciones fallaron:\n\n${resultSummary}`,
+      timestamp: new Date(),
+    })
+
+    // Pedir a Byte que interprete los resultados
+    const followUpMsg = allSuccess
+      ? `Las acciones se ejecutaron exitosamente. Resultados: ${resultSummary}. Dame un resumen de lo que se hizo y próximos pasos si aplican.`
+      : `Algunas acciones fallaron. Resultados: ${resultSummary}. Explícame qué salió mal y cómo solucionarlo.`
+
+    await sendMessage(followUpMsg)
+  } catch {
+    updateMessage(executingId, {
+      content: "❌ Error al ejecutar las acciones. Intenta de nuevo.",
+      timestamp: new Date(),
+    })
+  } finally {
+    setLoading(false)
+  }
+}
+```
+
+---
+
+## Parte 4 — Actualizar el componente de acciones para mostrar estado
+
+### `src/components/ai/chat-message.tsx` — Modificar la sección de acciones ejecutadas
+
+Buscar:
+```tsx
+{/* Acciones ejecutadas */}
+{message.actionsExecuted && (
+  <div className="flex items-center gap-1.5 text-xs text-primary">
+    <CheckCircle2 className="w-3 h-3" />
+    Acciones ejecutadas
+  </div>
+)}
+```
+
+Reemplazar con:
+```tsx
+{/* Acciones ejecutadas */}
+{message.actionsExecuted && (
+  <div className="flex items-center gap-1.5 text-xs text-primary">
+    <CheckCircle2 className="w-3 h-3" />
+    Ejecutado — revisa el resultado abajo
+  </div>
+)}
+```
+
+---
+
+## Parte 5 — Audit log page
+
+### `src/app/(dashboard)/settings/page.tsx` — Agregar sección de audit log
+
+Agregar al final del JSX, antes del cierre del `div` principal:
 
 ```tsx
-"use client"
+{/* Audit log */}
+<AuditLogSection />
+```
 
-import { cn } from "@/lib/utils"
-import type { ChatMessage, ProposedAction } from "@/types/ai"
+### `src/components/dashboard/audit-log.tsx` — CREAR
+
+```tsx
+import { prisma } from "@/lib/prisma"
 import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
-import { Bot, User, AlertTriangle, CheckCircle2, Terminal } from "lucide-react"
+import { History } from "lucide-react"
 
-interface ChatMessageProps {
-  message: ChatMessage
-  onConfirmActions?: (messageId: string, actions: ProposedAction[]) => void
+async function getAuditLogs() {
+  return prisma.auditLog.findMany({
+    orderBy: { createdAt: "desc" },
+    take: 20,
+  })
 }
 
-const riskConfig = {
-  low:    { label: "Bajo riesgo",  className: "border-primary/50 text-primary" },
-  medium: { label: "Riesgo medio", className: "border-accent/50 text-accent" },
-  high:   { label: "Alto riesgo",  className: "border-destructive/50 text-destructive" },
-}
+export async function AuditLogSection() {
+  const logs = await getAuditLogs()
 
-export function ChatMessageItem({ message, onConfirmActions }: ChatMessageProps) {
-  const isUser = message.role === "user"
+  if (logs.length === 0) return null
 
   return (
-    <div className={cn("flex gap-3", isUser && "flex-row-reverse")}>
-      {/* Avatar */}
-      <div className={cn(
-        "w-7 h-7 rounded-md flex items-center justify-center shrink-0 mt-0.5",
-        isUser
-          ? "bg-secondary border border-border"
-          : "bg-primary/10 border border-primary/20"
-      )}>
-        {isUser
-          ? <User className="w-3.5 h-3.5 text-muted-foreground" />
-          : <Bot className="w-3.5 h-3.5 text-primary" />
-        }
+    <div className="bg-card border border-border rounded-lg overflow-hidden">
+      <div className="px-5 py-4 border-b border-border flex items-center gap-2">
+        <History className="w-4 h-4 text-muted-foreground" />
+        <h2 className="text-sm font-medium">Registro de actividad</h2>
+        <Badge variant="secondary" className="ml-auto">{logs.length}</Badge>
       </div>
-
-      {/* Contenido */}
-      <div className={cn("flex flex-col gap-2 max-w-[80%]", isUser && "items-end")}>
-        <div className={cn(
-          "rounded-lg px-4 py-3 text-sm",
-          isUser
-            ? "bg-secondary text-foreground"
-            : "bg-card border border-border text-foreground"
-        )}>
-          {/* Renderizar markdown básico */}
-          <div
-            className="prose prose-invert prose-sm max-w-none
-              prose-code:bg-muted prose-code:px-1 prose-code:rounded prose-code:text-xs
-              prose-pre:bg-muted prose-pre:border prose-pre:border-border"
-            dangerouslySetInnerHTML={{
-              __html: message.content
-                .replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")
-                .replace(/`(.*?)`/g, '<code class="bg-muted px-1 rounded text-xs">$1</code>')
-                .replace(/\n/g, "<br/>"),
-            }}
-          />
-        </div>
-
-        {/* Acciones propuestas */}
-        {message.actions && message.actions.length > 0 && !message.actionsExecuted && (
-          <div className="w-full bg-card border border-border rounded-lg overflow-hidden">
-            <div className="px-4 py-3 border-b border-border flex items-center gap-2">
-              <Terminal className="w-3.5 h-3.5 text-accent" />
-              <span className="text-xs font-medium text-accent">Acciones propuestas</span>
+      <div className="divide-y divide-border max-h-64 overflow-y-auto">
+        {logs.map((log) => (
+          <div key={log.id} className="px-5 py-3 flex items-start justify-between gap-4">
+            <div className="flex flex-col gap-0.5 min-w-0">
+              <span className="text-xs font-medium truncate">{log.action}</span>
+              {log.target && (
+                <span className="text-[10px] text-muted-foreground truncate">{log.target}</span>
+              )}
             </div>
-            <div className="divide-y divide-border">
-              {message.actions.map((action) => (
-                <div key={action.id} className="px-4 py-3">
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="text-xs font-medium">{action.label}</span>
-                    <Badge
-                      variant="outline"
-                      className={cn("text-[9px] h-4", riskConfig[action.risk].className)}
-                    >
-                      {riskConfig[action.risk].label}
-                    </Badge>
-                  </div>
-                  <p className="text-xs text-muted-foreground mb-2">{action.description}</p>
-                  <code className="text-[10px] bg-muted px-2 py-1 rounded block text-muted-foreground font-mono">
-                    {action.command}
-                  </code>
-                </div>
-              ))}
-            </div>
-            <div className="px-4 py-3 border-t border-border flex gap-2">
-              <Button
-                size="sm"
-                className="h-7 text-xs bg-primary hover:bg-primary/90"
-                onClick={() => onConfirmActions?.(message.id, message.actions!)}
-              >
-                <CheckCircle2 className="w-3 h-3 mr-1" />
-                Confirmar y ejecutar
-              </Button>
-              <Button size="sm" variant="ghost" className="h-7 text-xs text-muted-foreground">
-                Cancelar
-              </Button>
-            </div>
+            <span className="text-[10px] text-muted-foreground shrink-0">
+              {new Date(log.createdAt).toLocaleString("es-MX", {
+                month: "short",
+                day: "numeric",
+                hour: "2-digit",
+                minute: "2-digit",
+              })}
+            </span>
           </div>
-        )}
-
-        {/* Acciones ejecutadas */}
-        {message.actionsExecuted && (
-          <div className="flex items-center gap-1.5 text-xs text-primary">
-            <CheckCircle2 className="w-3 h-3" />
-            Acciones ejecutadas
-          </div>
-        )}
-
-        <span className="text-[10px] text-muted-foreground">
-          {new Date(message.timestamp).toLocaleTimeString("es-MX", {
-            hour: "2-digit",
-            minute: "2-digit",
-          })}
-        </span>
-      </div>
-    </div>
-  )
-}
-```
-
----
-
-### `src/components/ai/chat-input.tsx` — CREAR
-
-```tsx
-"use client"
-
-import { useState, useRef, KeyboardEvent } from "react"
-import { Button } from "@/components/ui/button"
-import { Textarea } from "@/components/ui/textarea"
-import { SendHorizontal, Loader2 } from "lucide-react"
-
-interface ChatInputProps {
-  onSend: (message: string) => void
-  isLoading?: boolean
-  disabled?: boolean
-}
-
-export function ChatInput({ onSend, isLoading, disabled }: ChatInputProps) {
-  const [value, setValue] = useState("")
-  const textareaRef = useRef<HTMLTextAreaElement>(null)
-
-  function handleSend() {
-    const trimmed = value.trim()
-    if (!trimmed || isLoading) return
-    onSend(trimmed)
-    setValue("")
-  }
-
-  function handleKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault()
-      handleSend()
-    }
-  }
-
-  return (
-    <div className="flex gap-2 items-end p-4 border-t border-border bg-card">
-      <Textarea
-        ref={textareaRef}
-        value={value}
-        onChange={(e) => setValue(e.target.value)}
-        onKeyDown={handleKeyDown}
-        placeholder="Pregunta algo o pide que haga algo en tu servidor..."
-        className="min-h-[44px] max-h-[120px] resize-none bg-input border-border text-sm"
-        disabled={disabled || isLoading}
-        rows={1}
-      />
-      <Button
-        onClick={handleSend}
-        disabled={!value.trim() || isLoading || disabled}
-        size="icon"
-        className="h-11 w-11 shrink-0 bg-primary hover:bg-primary/90"
-      >
-        {isLoading
-          ? <Loader2 className="w-4 h-4 animate-spin" />
-          : <SendHorizontal className="w-4 h-4" />
-        }
-      </Button>
-    </div>
-  )
-}
-```
-
----
-
-### `src/components/ai/chat-suggestions.tsx` — CREAR
-
-```tsx
-"use client"
-
-interface Suggestion {
-  label: string
-  prompt: string
-}
-
-const suggestions: Suggestion[] = [
-  { label: "🔍 Diagnóstico", prompt: "Analiza el estado actual del servidor y dime si hay algo que deba atender" },
-  { label: "⚡ Optimizar RAM", prompt: "Mi RAM está al límite, ¿cómo puedo optimizar el uso de memoria?" },
-  { label: "🌐 Instalar Nginx", prompt: "Quiero instalar y configurar Nginx en el servidor" },
-  { label: "🗄️ Instalar MySQL", prompt: "Instala MySQL y crea una base de datos para WordPress" },
-  { label: "🔒 Revisar seguridad", prompt: "Revisa la configuración de seguridad del servidor y dame recomendaciones" },
-  { label: "📋 Ver logs", prompt: "¿Cómo puedo ver los logs de errores de Nginx?" },
-]
-
-interface ChatSuggestionsProps {
-  onSelect: (prompt: string) => void
-}
-
-export function ChatSuggestions({ onSelect }: ChatSuggestionsProps) {
-  return (
-    <div className="p-4 space-y-3">
-      <p className="text-xs text-muted-foreground text-center">
-        Hola, soy <strong className="text-primary">Tezca</strong> — tu asistente de servidor.
-        ¿En qué te ayudo?
-      </p>
-      <div className="grid grid-cols-2 gap-2">
-        {suggestions.map((s) => (
-          <button
-            key={s.prompt}
-            onClick={() => onSelect(s.prompt)}
-            className="text-left px-3 py-2 rounded-lg bg-secondary hover:bg-secondary/80
-              border border-border text-xs transition-colors"
-          >
-            {s.label}
-          </button>
         ))}
       </div>
     </div>
@@ -482,210 +536,9 @@ export function ChatSuggestions({ onSelect }: ChatSuggestionsProps) {
 }
 ```
 
----
-
-## Paso 6 — Página del módulo IA
-
-### `src/app/(dashboard)/ai/page.tsx` — CREAR
-
+Agregar el import en `settings/page.tsx`:
 ```tsx
-"use client"
-
-import { useRef, useEffect } from "react"
-import { useChatStore } from "@/store/chat.store"
-import { ChatMessageItem } from "@/components/ai/chat-message"
-import { ChatInput } from "@/components/ai/chat-input"
-import { ChatSuggestions } from "@/components/ai/chat-suggestions"
-import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
-import { Bot, Trash2 } from "lucide-react"
-import type { ChatMessage, ProposedAction } from "@/types/ai"
-
-function generateId() {
-  return Math.random().toString(36).slice(2, 11)
-}
-
-export default function AIPage() {
-  const { messages, isLoading, addMessage, updateMessage, setLoading, clearMessages } =
-    useChatStore()
-  const bottomRef = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" })
-  }, [messages])
-
-  async function sendMessage(content: string) {
-    const userMessage: ChatMessage = {
-      id: generateId(),
-      role: "user",
-      content,
-      timestamp: new Date(),
-    }
-    addMessage(userMessage)
-    setLoading(true)
-
-    const assistantId = generateId()
-    addMessage({
-      id: assistantId,
-      role: "assistant",
-      content: "...",
-      timestamp: new Date(),
-    })
-
-    try {
-      const history = [...messages, userMessage].map((m) => ({
-        role: m.role,
-        content: m.content,
-      }))
-
-      const res = await fetch("/api/ai/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: history }),
-      })
-
-      const data = await res.json()
-
-      updateMessage(assistantId, {
-        content: data.text,
-        actions: data.actions ?? undefined,
-        timestamp: new Date(),
-      })
-    } catch {
-      updateMessage(assistantId, {
-        content: "Lo siento, ocurrió un error al conectar con la IA. Intenta de nuevo.",
-        timestamp: new Date(),
-      })
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  async function handleConfirmActions(messageId: string, actions: ProposedAction[]) {
-    // Marcar acciones como ejecutadas en el mensaje
-    updateMessage(messageId, { actionsExecuted: true })
-
-    // Notificar al asistente que las acciones fueron aprobadas
-    // En Commit 5 esto llamará al agente real para ejecutarlas
-    const confirmMsg = `He confirmado las acciones propuestas. (Nota: la ejecución real de comandos en el servidor estará disponible en la próxima versión del panel.)`
-    await sendMessage(confirmMsg)
-  }
-
-  return (
-    <div className="flex flex-col h-[calc(100vh-8rem)] max-w-3xl mx-auto">
-      {/* Header */}
-      <div className="flex items-center justify-between mb-4">
-        <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-lg bg-primary/10 border border-primary/20 flex items-center justify-center">
-            <Bot className="w-4 h-4 text-primary" />
-          </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <h1 className="text-lg font-semibold">Tezca AI</h1>
-              <Badge variant="outline" className="border-accent/50 text-accent text-[10px]">PRO</Badge>
-            </div>
-            <p className="text-xs text-muted-foreground">Asistente inteligente de servidor</p>
-          </div>
-        </div>
-        {messages.length > 0 && (
-          <Button
-            variant="ghost"
-            size="sm"
-            className="text-muted-foreground hover:text-foreground h-8"
-            onClick={clearMessages}
-          >
-            <Trash2 className="w-3.5 h-3.5 mr-1.5" />
-            Limpiar
-          </Button>
-        )}
-      </div>
-
-      {/* Chat area */}
-      <div className="flex-1 bg-background border border-border rounded-lg overflow-hidden flex flex-col">
-        <div className="flex-1 overflow-y-auto">
-          {messages.length === 0 ? (
-            <ChatSuggestions onSelect={sendMessage} />
-          ) : (
-            <div className="p-4 space-y-4">
-              {messages.map((message) => (
-                <ChatMessageItem
-                  key={message.id}
-                  message={message}
-                  onConfirmActions={handleConfirmActions}
-                />
-              ))}
-              {isLoading && messages[messages.length - 1]?.content === "..." && (
-                <div className="flex gap-3">
-                  <div className="w-7 h-7 rounded-md bg-primary/10 border border-primary/20 flex items-center justify-center shrink-0">
-                    <Bot className="w-3.5 h-3.5 text-primary" />
-                  </div>
-                  <div className="bg-card border border-border rounded-lg px-4 py-3">
-                    <div className="flex gap-1">
-                      <span className="w-1.5 h-1.5 bg-primary rounded-full animate-bounce [animation-delay:0ms]" />
-                      <span className="w-1.5 h-1.5 bg-primary rounded-full animate-bounce [animation-delay:150ms]" />
-                      <span className="w-1.5 h-1.5 bg-primary rounded-full animate-bounce [animation-delay:300ms]" />
-                    </div>
-                  </div>
-                </div>
-              )}
-              <div ref={bottomRef} />
-            </div>
-          )}
-        </div>
-
-        <ChatInput onSend={sendMessage} isLoading={isLoading} />
-      </div>
-    </div>
-  )
-}
-```
-
----
-
-## Paso 7 — Agregar IA al sidebar y nav-items
-
-### `src/components/layout/nav-items.ts` — REEMPLAZAR
-
-```typescript
-import type { NavItem } from "@/types"
-
-export const navItems: NavItem[] = [
-  { label: "Dashboard",      href: "/",         icon: "LayoutDashboard" },
-  { label: "Tezca AI",       href: "/ai",        icon: "Bot",     proOnly: true },
-  { label: "Web",            href: "/web",       icon: "Globe" },
-  { label: "Bases de datos", href: "/databases", icon: "Database" },
-  { label: "Correo",         href: "/mail",      icon: "Mail",    proOnly: true },
-  { label: "DNS",            href: "/dns",       icon: "Server",  proOnly: true },
-  { label: "Firewall",       href: "/firewall",  icon: "Shield",  proOnly: true },
-  { label: "Backups",        href: "/backups",   icon: "Archive", proOnly: true },
-  { label: "Terminal",       href: "/terminal",  icon: "Terminal" },
-  { label: "Usuarios",       href: "/users",     icon: "Users" },
-  { label: "Configuración",  href: "/settings",  icon: "Settings" },
-]
-```
-
-### `src/components/layout/sidebar.tsx` — Agregar Bot al iconMap
-
-Buscar la línea del `iconMap` y agregar `Bot`:
-
-```tsx
-import {
-  LayoutDashboard, Globe, Database, Mail, Server,
-  Shield, Archive, Terminal, Users, Settings, ChevronRight, Bot,
-} from "lucide-react"
-
-const iconMap: Record<string, React.ElementType> = {
-  LayoutDashboard, Globe, Database, Mail, Server,
-  Shield, Archive, Terminal, Users, Settings, Bot,
-}
-```
-
----
-
-## Paso 8 — Agregar shadcn Textarea si no está
-
-```bash
-npx shadcn@latest add textarea
+import { AuditLogSection } from "@/components/dashboard/audit-log"
 ```
 
 ---
@@ -693,20 +546,26 @@ npx shadcn@latest add textarea
 ## Paso final — Verificación y commit
 
 ```bash
-# 1. Verificar que ANTHROPIC_API_KEY está en .env
-# ANTHROPIC_API_KEY="sk-ant-..."
+# 1. Reiniciar el agente con la nueva versión
+# Matar el proceso actual:
+lsof -ti:7070 | xargs kill -9
+
+# Iniciar el agente actualizado:
+AGENT_TOKEN="tu_token" node agent/server.js
+# Debe mostrar: tezcaagent v0.2.0
 
 # 2. Build sin errores
 npm run build
 
-# 3. Verificar en dev:
-# - /ai carga con sugerencias
-# - El chat responde con contexto del servidor
-# - Las acciones propuestas muestran el botón "Confirmar y ejecutar"
+# 3. Probar en dev:
+# - Abrir Byte AI
+# - Pedir "Instala nginx" o "¿qué servicios tengo corriendo?"
+# - Confirmar las acciones propuestas
+# - Verificar que se ejecutan y Byte reporta el resultado
 
 # 4. Commit
 git add .
-git commit -m "feat: tezca AI assistant with server context and proposed actions"
+git commit -m "feat: real command execution with allowlist and audit log"
 git push origin main
 ```
 
@@ -714,15 +573,21 @@ git push origin main
 
 ## Notas para el agente
 
-- `@anthropic-ai/sdk` debe instalarse en la raíz del proyecto, no en `/agent`.
-- La página `/ai` es `"use client"` porque usa Zustand y state local — correcto e intencional.
-- El modelo a usar es `claude-opus-4-5` — no cambiar a otro modelo.
-- Las acciones propuestas en este commit **no se ejecutan realmente** en el servidor —
-  solo se muestran y se confirman visualmente. La ejecución real viene en Commit 5
-  cuando se implemente el endpoint `/agent/execute` con validación de comandos permitidos.
-- Si `ANTHROPIC_API_KEY` no está en `.env`, la ruta `/api/ai/chat` lanzará un error 500.
-  Asegurarse de que la key esté configurada antes de probar.
-- El historial del chat vive en Zustand (memoria del cliente) — se borra al recargar la página.
-  Persistencia en DB viene en versión futura.
-- `prose-invert` de Tailwind Typography puede requerir: `npm install @tailwindcss/typography`
-  y agregarlo a `tailwind.config.ts` en el array de plugins: `plugins: [require('@tailwindcss/typography')]`
+- El endpoint `/execute` del agente usa una lista blanca de regex — nunca ejecuta comandos
+  arbitrarios. Si un comando no hace match con ningún patrón, retorna error 403.
+- En macOS los comandos como `apt install` no funcionan — el agente los rechazará o fallará.
+  Esto es esperado: el agente está diseñado para Linux. En desarrollo en Mac, Byte puede
+  proponer los comandos pero la ejecución real solo funciona en un servidor Linux.
+- El audit log registra TODOS los comandos ejecutados con el userId — importante para
+  producción y compliance.
+- `session.user.id` requiere que el tipo de sesión incluya `id`. Si TypeScript marca error,
+  agregar en `src/types/next-auth.d.ts`:
+  ```typescript
+  declare module "next-auth" {
+    interface Session {
+      user: { id: string; role: string } & DefaultSession["user"]
+    }
+  }
+  ```
+- El timeout de ejecución es 60 segundos — suficiente para `apt install` pero no para
+  operaciones muy largas. Ajustar si es necesario.

@@ -1,53 +1,42 @@
 import { auth } from "@/lib/auth"
 import { NextRequest, NextResponse } from "next/server"
+import { prisma } from "@/lib/prisma"
 
 const AGENT_URL = process.env.AGENT_URL ?? "http://127.0.0.1:7070"
 const AGENT_TOKEN = process.env.AGENT_TOKEN ?? ""
 
-type Props = {
-  params: Promise<{ route: string[] }>
-}
-
-export async function GET(req: NextRequest, props: Props) {
-  const params = await props.params
+export async function POST(req: NextRequest) {
   const session = await auth()
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
 
-  const path = "/" + params.route.join("/")
+  const { commands, actionLabels } = await req.json()
 
-  try {
-    const res = await fetch(`${AGENT_URL}${path}`, {
-      headers: { Authorization: `Bearer ${AGENT_TOKEN}` },
-      signal: AbortSignal.timeout(5000),
-    })
-    const data = await res.json()
-    return NextResponse.json(data)
-  } catch {
-    return NextResponse.json({ error: "Agent unavailable" }, { status: 503 })
+  if (!Array.isArray(commands) || commands.length === 0) {
+    return NextResponse.json({ error: "commands requerido" }, { status: 400 })
   }
-}
 
-export async function POST(req: NextRequest, props: Props) {
-  const params = await props.params
-  const session = await auth()
-  if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
-
-  const path = "/" + params.route.join("/")
-  const body = await req.json().catch(() => ({}))
+  await prisma.auditLog.create({
+    data: {
+      userId: session.user.id,
+      action: "execute_commands",
+      target: actionLabels?.join(", ") ?? commands.join(", "),
+      metadata: JSON.stringify({ commands }),
+    },
+  })
 
   try {
-    const res = await fetch(`${AGENT_URL}${path}`, {
+    const res = await fetch(`${AGENT_URL}/execute`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${AGENT_TOKEN}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(5000),
+      body: JSON.stringify({ commands }),
+      signal: AbortSignal.timeout(60000),
     })
     const data = await res.json()
     return NextResponse.json(data)
   } catch {
-    return NextResponse.json({ error: "Agent unavailable" }, { status: 503 })
+    return NextResponse.json({ error: "agent_unavailable" }, { status: 503 })
   }
 }

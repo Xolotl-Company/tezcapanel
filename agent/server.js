@@ -1,4 +1,5 @@
 const http = require("http")
+const { exec } = require("child_process")  // ← NUEVO
 const si = require("systeminformation")
 
 const PORT = 7070
@@ -8,6 +9,62 @@ const TOKEN = process.env.AGENT_TOKEN
 if (!TOKEN) {
   console.error("❌ AGENT_TOKEN no definido — exporta la variable de entorno")
   process.exit(1)
+}
+
+// --- Lista blanca de comandos permitidos --- NUEVO
+const ALLOWED_COMMANDS = [
+  /^apt(-get)? install -y [\w\s\-\.]+$/,
+  /^apt(-get)? (remove|update|upgrade) -y [\w\s\-\.]+$/,
+  /^yum (install|remove|update) -y [\w\s\-\.]+$/,
+  /^dnf (install|remove|update) -y [\w\s\-\.]+$/,
+  /^systemctl (start|stop|restart|reload|enable|disable|status) [\w\-\.]+$/,
+  /^nginx -t$/,
+  /^nginx -s reload$/,
+  /^mysql -e "CREATE DATABASE [\w]+ CHARACTER SET utf8mb4"$/,
+  /^mysql -e "CREATE USER '[\w]+'@'localhost' IDENTIFIED BY '[^']+'"$/,
+  /^mysql -e "GRANT ALL ON [\w]+\.\* TO '[\w]+'@'localhost'"$/,
+  /^mysql -e "FLUSH PRIVILEGES"$/,
+  /^mysqldump [\w\s\-\.]+ > [\w\/\-\.]+$/,
+  /^certbot --nginx -d [\w\.\-]+ --non-interactive --agree-tos -m [\w@\.\-]+$/,
+  /^certbot renew(--dry-run)?$/,
+  /^mkdir -p \/etc\/(nginx|apache2|mysql|postfix)\//,
+  /^mkdir -p \/var\/www\/[\w\-\.]+$/,
+  /^chown -R www-data:www-data \/var\/www\/[\w\-\.]+$/,
+  /^chmod -R 755 \/var\/www\/[\w\-\.]+$/,
+  /^cat \/var\/log\/(nginx|apache2|mysql|syslog|auth\.log)(\/[\w\-\.]+)?$/,
+  /^tail -n \d+ \/var\/log\/(nginx|apache2|mysql|syslog|auth\.log)(\/[\w\-\.]+)?$/,
+  /^df -h$/,
+  /^free -h$/,
+  /^top -bn1$/,
+  /^ps aux$/,
+  /^netstat -tlnp$/,
+  /^ss -tlnp$/,
+  /^ufw (enable|disable|status|allow|deny) ?[\w\/]*$/,
+]
+
+function isCommandAllowed(command) {
+  return ALLOWED_COMMANDS.some((pattern) => pattern.test(command.trim()))
+}
+
+function executeCommand(command, timeout = 30000) {
+  return new Promise((resolve, reject) => {
+    if (!isCommandAllowed(command)) {
+      reject(new Error(`Comando no permitido: ${command}`))
+      return
+    }
+    exec(command, { timeout, maxBuffer: 1024 * 1024 }, (error, stdout, stderr) => {
+      if (error && error.killed) {
+        reject(new Error("Comando excedió el tiempo límite"))
+        return
+      }
+      resolve({
+        success: !error,
+        stdout: stdout?.trim() ?? "",
+        stderr: stderr?.trim() ?? "",
+        exitCode: error?.code ?? 0,
+      })
+    })
+  })
 }
 
 // --- Auth helper ---
@@ -80,29 +137,84 @@ async function handleServices(res) {
   res.end(JSON.stringify(services))
 }
 
+// --- NUEVO: Execute handler ---
+async function handleExecute(req, res) {
+  let body = ""
+  req.on("data", (chunk) => { body += chunk })
+  req.on("end", async () => {
+    try {
+      const { commands } = JSON.parse(body)
+
+      if (!Array.isArray(commands) || commands.length === 0) {
+        res.writeHead(400)
+        res.end(JSON.stringify({ error: "commands array requerido" }))
+        return
+      }
+
+      if (commands.length > 10) {
+        res.writeHead(400)
+        res.end(JSON.stringify({ error: "máximo 10 comandos por ejecución" }))
+        return
+      }
+
+      const results = []
+
+      for (const command of commands) {
+        if (typeof command !== "string") {
+          results.push({ command, success: false, error: "comando inválido" })
+          continue
+        }
+        try {
+          const result = await executeCommand(command)
+          results.push({ command, ...result })
+          if (!result.success) {
+            results.push({
+              command: "(detenido)",
+              success: false,
+              error: "Ejecución detenida por error en comando anterior",
+            })
+            break
+          }
+        } catch (err) {
+          results.push({ command, success: false, error: err.message, stdout: "", stderr: "" })
+          break
+        }
+      }
+
+      res.end(JSON.stringify({ results }))
+    } catch {
+      res.writeHead(400)
+      res.end(JSON.stringify({ error: "JSON inválido" }))
+    }
+  })
+}
+
 async function handleRestartService(name, res) {
-  const allowed = ["nginx", "mysql", "postfix", "named"]
+  const allowed = ["nginx", "mysql", "mariadb", "postfix", "named", "apache2"]
   if (!allowed.includes(name)) {
     res.writeHead(400)
     res.end(JSON.stringify({ error: "service not allowed" }))
     return
   }
-  // TODO: ejecutar systemctl restart {name} con validación adicional
-  res.end(JSON.stringify({ ok: true }))
+  try {
+    const result = await executeCommand(`systemctl restart ${name}`)
+    res.end(JSON.stringify(result))
+  } catch (err) {
+    res.writeHead(500)
+    res.end(JSON.stringify({ error: err.message }))
+  }
 }
 
 // --- Router ---
 const server = http.createServer(async (req, res) => {
   setHeaders(res)
 
-  // OPTIONS preflight
   if (req.method === "OPTIONS") {
     res.writeHead(204)
     res.end()
     return
   }
 
-  // Auth check
   if (!isAuthorized(req)) {
     res.writeHead(401)
     res.end(JSON.stringify({ error: "unauthorized" }))
@@ -114,18 +226,16 @@ const server = http.createServer(async (req, res) => {
 
   try {
     if (method === "GET" && url === "/health") {
-      res.end(JSON.stringify({ status: "ok", version: "0.1.0" }))
-
+      res.end(JSON.stringify({ status: "ok", version: "0.2.0" }))
     } else if (method === "GET" && url === "/metrics") {
       await handleMetrics(res)
-
     } else if (method === "GET" && url === "/services") {
       await handleServices(res)
-
+    } else if (method === "POST" && url === "/execute") {   // ← NUEVO
+      await handleExecute(req, res)
     } else if (method === "POST" && url.startsWith("/services/") && url.endsWith("/restart")) {
       const name = url.split("/")[2]
       await handleRestartService(name, res)
-
     } else {
       res.writeHead(404)
       res.end(JSON.stringify({ error: "not found" }))
@@ -138,5 +248,5 @@ const server = http.createServer(async (req, res) => {
 })
 
 server.listen(PORT, HOST, () => {
-  console.log(`✔ tezcaagent v0.1.0 escuchando en http://${HOST}:${PORT}`)
+  console.log(`✔ tezcaagent v0.2.0 escuchando en http://${HOST}:${PORT}`)
 })
