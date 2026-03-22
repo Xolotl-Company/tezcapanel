@@ -1,756 +1,663 @@
-# Tezcapanel — Agent Instructions (Commit 1)
+# Tezcapanel — Agent Instructions (Commit 2)
 
 ## Objetivo
 
-Configurar la base del proyecto Tezcapanel: instalar dependencias, crear la estructura
-de carpetas, y generar los archivos base. El proyecto ya existe como un boilerplate de
-`create-next-app` con Next.js + TypeScript + Tailwind CSS.
-
-**No modificar** archivos existentes a menos que se indique explícitamente.
+Implementar el sistema de autenticación completo y el layout del dashboard con sidebar.
+Al terminar este commit, el panel debe tener: página de login funcional, sesiones JWT,
+rutas protegidas, sidebar de navegación, topbar, y el dashboard home con métricas placeholder.
 
 ---
 
 ## Contexto del proyecto
 
-- **Repo:** Xolotl-Company/tezcapanel
-- **Stack actual:** Next.js 15, TypeScript, Tailwind CSS, App Router
-- **Directorio raíz:** contiene `src/app/`, `package.json`, `tsconfig.json`
-- **Objetivo final:** Panel de administración de servidores Linux (alternativa a cPanel/aaPanel)
+- **Stack:** Next.js 15, TypeScript, Tailwind CSS, shadcn/ui, NextAuth v5, Prisma + SQLite, Zustand
+- **Identidad visual:** Panel de servidores con estética inspirada en cultura prehispánica mexicana.
+  Nombre "Tezcapanel" viene de Tezcatlipoca. Paleta: negro profundo, verde esmeralda (`#10B981`),
+  gris carbón, acentos en ámbar/dorado. Tipografía seria pero moderna. Dark mode por defecto.
+- **Commit anterior:** Ya existe toda la estructura de carpetas, dependencias instaladas,
+  `src/lib/auth.ts`, `src/lib/prisma.ts`, `src/lib/utils.ts`, `src/lib/agent-client.ts`,
+  `src/store/server.store.ts`, `src/types/index.ts`, `src/components/layout/nav-items.ts`
 
 ---
 
-## Paso 1 — Instalar dependencias
-
-Ejecuta los siguientes comandos en la raíz del proyecto:
-
-```bash
-npm install next-auth@beta @auth/prisma-adapter bcryptjs
-npm install --save-dev @types/bcryptjs
-npm install prisma @prisma/client
-npm install zustand
-npm install clsx tailwind-merge lucide-react
-```
-
-Luego inicializa Prisma con SQLite:
-
-```bash
-npx prisma init --datasource-provider sqlite
-```
-
-Luego inicializa shadcn/ui con estos valores:
-- Style: `Default`
-- Base color: `Slate`
-- CSS variables: `Yes`
-
-```bash
-npx shadcn@latest init
-```
-
-Luego instala los componentes de shadcn necesarios:
-
-```bash
-npx shadcn@latest add button card input label badge separator avatar dropdown-menu toast tooltip
-```
+## Archivos a crear / modificar
 
 ---
 
-## Paso 2 — Crear estructura de carpetas
+### `src/app/layout.tsx` — Root layout (MODIFICAR el existente)
 
-Crea los siguientes directorios (vacíos si no existe contenido aún):
+```tsx
+import type { Metadata } from "next"
+import { GeistSans } from "geist/font/sans"
+import { GeistMono } from "geist/font/mono"
+import "./globals.css"
+import { Toaster } from "@/components/ui/toaster"
 
-```
-src/
-├── app/
-│   ├── (auth)/
-│   │   └── login/
-│   ├── (dashboard)/
-│   │   ├── web/
-│   │   ├── databases/
-│   │   ├── mail/
-│   │   └── dns/
-│   └── api/
-│       ├── auth/
-│       │   └── [...nextauth]/
-│       └── agent/
-│           └── [...route]/
-├── components/
-│   ├── layout/
-│   └── dashboard/
-├── lib/
-├── store/
-└── types/
-
-agent/
-├── handlers/
-├── middleware/
-├── config/
-└── systemd/
-```
-
----
-
-## Paso 3 — Crear archivos
-
-Crea cada archivo con exactamente el contenido especificado a continuación.
-
----
-
-### `.env`
-
-> Solo crear si no existe. Nunca sobreescribir.
-
-```env
-DATABASE_URL="file:./dev.db"
-AUTH_SECRET="REEMPLAZA_CON_TU_SECRET"
-AGENT_URL="http://127.0.0.1:7070"
-AGENT_TOKEN="REEMPLAZA_CON_TU_TOKEN"
-NODE_ENV="development"
-```
-
-Agrega `.env` al `.gitignore` si no está ya incluido.
-
----
-
-### `prisma/schema.prisma`
-
-```prisma
-generator client {
-  provider = "prisma-client-js"
+export const metadata: Metadata = {
+  title: "Tezcapanel",
+  description: "Panel de administración de servidores",
 }
 
-datasource db {
-  provider = "sqlite"
-  url      = env("DATABASE_URL")
+export default function RootLayout({
+  children,
+}: {
+  children: React.ReactNode
+}) {
+  return (
+    <html lang="es" className="dark">
+      <body className={`${GeistSans.variable} ${GeistMono.variable} font-sans antialiased bg-background text-foreground`}>
+        {children}
+        <Toaster />
+      </body>
+    </html>
+  )
+}
+```
+
+> Instala Geist si no está: `npm install geist`
+
+---
+
+### `src/app/globals.css` — Design tokens (REEMPLAZAR contenido completo)
+
+```css
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 5%;
+    --foreground: 0 0% 95%;
+    --card: 0 0% 8%;
+    --card-foreground: 0 0% 95%;
+    --popover: 0 0% 8%;
+    --popover-foreground: 0 0% 95%;
+    --primary: 160 84% 39%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 0 0% 12%;
+    --secondary-foreground: 0 0% 85%;
+    --muted: 0 0% 12%;
+    --muted-foreground: 0 0% 50%;
+    --accent: 43 96% 56%;
+    --accent-foreground: 0 0% 5%;
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 0 0% 15%;
+    --input: 0 0% 12%;
+    --ring: 160 84% 39%;
+    --radius: 0.5rem;
+    --sidebar-width: 240px;
+  }
 }
 
-model User {
-  id        String   @id @default(cuid())
-  email     String   @unique
-  name      String?
-  password  String
-  role      String   @default("ADMIN")
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-}
+@layer base {
+  * { @apply border-border; }
+  body { @apply bg-background text-foreground; }
 
-model AuditLog {
-  id        String   @id @default(cuid())
-  userId    String
-  action    String
-  target    String?
-  metadata  String?
-  createdAt DateTime @default(now())
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { @apply bg-background; }
+  ::-webkit-scrollbar-thumb { @apply bg-border rounded-full; }
+  ::-webkit-scrollbar-thumb:hover { @apply bg-muted-foreground; }
 }
 ```
 
 ---
 
-### `src/lib/prisma.ts`
+### `src/app/(auth)/login/page.tsx` — Página de login (REEMPLAZAR placeholder)
+
+```tsx
+"use client"
+
+import { useState } from "react"
+import { signIn } from "next-auth/react"
+import { useRouter } from "next/navigation"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { useToast } from "@/hooks/use-toast"
+import { Loader2, Shield } from "lucide-react"
+
+export default function LoginPage() {
+  const router = useRouter()
+  const { toast } = useToast()
+  const [loading, setLoading] = useState(false)
+  const [form, setForm] = useState({ email: "", password: "" })
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault()
+    setLoading(true)
+
+    const result = await signIn("credentials", {
+      email: form.email,
+      password: form.password,
+      redirect: false,
+    })
+
+    if (result?.error) {
+      toast({
+        variant: "destructive",
+        title: "Credenciales incorrectas",
+        description: "Verifica tu email y contraseña.",
+      })
+      setLoading(false)
+      return
+    }
+
+    router.push("/")
+    router.refresh()
+  }
+
+  return (
+    <div className="min-h-screen bg-background flex items-center justify-center p-4">
+      {/* Grid de fondo */}
+      <div className="absolute inset-0 bg-[linear-gradient(to_right,#ffffff08_1px,transparent_1px),linear-gradient(to_bottom,#ffffff08_1px,transparent_1px)] bg-[size:48px_48px]" />
+
+      <div className="relative w-full max-w-sm">
+        {/* Glow verde */}
+        <div className="absolute -inset-px bg-gradient-to-b from-primary/20 to-transparent rounded-xl blur-sm" />
+
+        <div className="relative bg-card border border-border rounded-xl p-8 shadow-2xl">
+          {/* Icono */}
+          <div className="flex flex-col items-center mb-8">
+            <div className="w-12 h-12 rounded-lg bg-primary/10 border border-primary/30 flex items-center justify-center mb-4">
+              <Shield className="w-6 h-6 text-primary" />
+            </div>
+            <h1 className="text-xl font-semibold tracking-tight">Tezcapanel</h1>
+            <p className="text-sm text-muted-foreground mt-1">Accede a tu panel de control</p>
+          </div>
+
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="email">Email</Label>
+              <Input
+                id="email"
+                type="email"
+                placeholder="admin@servidor.com"
+                value={form.email}
+                onChange={(e) => setForm({ ...form, email: e.target.value })}
+                required
+                autoComplete="email"
+                className="bg-input border-border"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="password">Contraseña</Label>
+              <Input
+                id="password"
+                type="password"
+                placeholder="••••••••"
+                value={form.password}
+                onChange={(e) => setForm({ ...form, password: e.target.value })}
+                required
+                autoComplete="current-password"
+                className="bg-input border-border"
+              />
+            </div>
+
+            <Button
+              type="submit"
+              className="w-full bg-primary hover:bg-primary/90 text-primary-foreground font-medium mt-2"
+              disabled={loading}
+            >
+              {loading ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  Entrando...
+                </>
+              ) : (
+                "Entrar"
+              )}
+            </Button>
+          </form>
+        </div>
+
+        <p className="text-center text-xs text-muted-foreground mt-6">
+          Tezcapanel — Panel de administración de servidores
+        </p>
+      </div>
+    </div>
+  )
+}
+```
+
+---
+
+### `src/components/layout/sidebar.tsx` — Sidebar (CREAR)
+
+```tsx
+"use client"
+
+import Link from "next/link"
+import { usePathname } from "next/navigation"
+import { navItems } from "./nav-items"
+import { cn } from "@/lib/utils"
+import { Badge } from "@/components/ui/badge"
+import {
+  LayoutDashboard, Globe, Database, Mail, Server,
+  Shield, Archive, Terminal, Users, Settings, ChevronRight,
+} from "lucide-react"
+
+const iconMap: Record<string, React.ElementType> = {
+  LayoutDashboard, Globe, Database, Mail, Server,
+  Shield, Archive, Terminal, Users, Settings,
+}
+
+export function Sidebar() {
+  const pathname = usePathname()
+
+  return (
+    <aside className="w-[var(--sidebar-width)] h-screen bg-card border-r border-border flex flex-col shrink-0">
+      {/* Logo */}
+      <div className="h-14 flex items-center gap-3 px-5 border-b border-border">
+        <div className="w-7 h-7 rounded-md bg-primary/10 border border-primary/30 flex items-center justify-center">
+          <Shield className="w-3.5 h-3.5 text-primary" />
+        </div>
+        <span className="font-semibold text-sm tracking-wide">Tezcapanel</span>
+        <Badge variant="secondary" className="ml-auto text-[10px] px-1.5 py-0 h-4">
+          Community
+        </Badge>
+      </div>
+
+      {/* Nav */}
+      <nav className="flex-1 overflow-y-auto py-3 px-2">
+        <div className="space-y-0.5">
+          {navItems.map((item) => {
+            const Icon = iconMap[item.icon] ?? ChevronRight
+            const isActive =
+              pathname === item.href ||
+              (item.href !== "/" && pathname.startsWith(item.href))
+
+            return (
+              <Link
+                key={item.href}
+                href={item.proOnly ? "#" : item.href}
+                className={cn(
+                  "flex items-center gap-3 px-3 py-2 rounded-md text-sm transition-colors group",
+                  isActive
+                    ? "bg-primary/10 text-primary font-medium"
+                    : "text-muted-foreground hover:text-foreground hover:bg-secondary",
+                  item.proOnly && "opacity-50 cursor-not-allowed"
+                )}
+              >
+                <Icon className={cn(
+                  "w-4 h-4 shrink-0 transition-colors",
+                  isActive
+                    ? "text-primary"
+                    : "text-muted-foreground group-hover:text-foreground"
+                )} />
+                <span className="flex-1">{item.label}</span>
+                {item.proOnly && (
+                  <Badge
+                    variant="outline"
+                    className="text-[9px] px-1 py-0 h-3.5 border-accent/50 text-accent"
+                  >
+                    PRO
+                  </Badge>
+                )}
+              </Link>
+            )
+          })}
+        </div>
+      </nav>
+
+      {/* Footer */}
+      <div className="p-3 border-t border-border">
+        <div className="flex items-center gap-2 px-3 py-2 rounded-md bg-secondary/50">
+          <div className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" />
+          <span className="text-xs text-muted-foreground">Servidor activo</span>
+        </div>
+      </div>
+    </aside>
+  )
+}
+```
+
+---
+
+### `src/components/layout/topbar.tsx` — Topbar (CREAR)
+
+```tsx
+"use client"
+
+import { signOut } from "next-auth/react"
+import { Button } from "@/components/ui/button"
+import { Avatar, AvatarFallback } from "@/components/ui/avatar"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import { Bell, LogOut, Settings, User } from "lucide-react"
+
+interface TopbarProps {
+  user?: { name?: string | null; email?: string | null }
+}
+
+export function Topbar({ user }: TopbarProps) {
+  const initials = user?.name
+    ? user.name.split(" ").map((n) => n[0]).join("").toUpperCase().slice(0, 2)
+    : user?.email?.[0].toUpperCase() ?? "U"
+
+  return (
+    <header className="h-14 border-b border-border bg-card flex items-center justify-between px-6 shrink-0">
+      <div className="flex items-center gap-2">
+        <span className="text-sm text-muted-foreground">Panel de control</span>
+      </div>
+
+      <div className="flex items-center gap-2">
+        <Button
+          variant="ghost"
+          size="icon"
+          className="w-8 h-8 text-muted-foreground hover:text-foreground"
+        >
+          <Bell className="w-4 h-4" />
+        </Button>
+
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="ghost" className="h-8 w-8 rounded-full p-0">
+              <Avatar className="h-8 w-8">
+                <AvatarFallback className="bg-primary/10 text-primary text-xs font-semibold border border-primary/20">
+                  {initials}
+                </AvatarFallback>
+              </Avatar>
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-48">
+            <DropdownMenuLabel className="font-normal">
+              <div className="flex flex-col space-y-1">
+                <p className="text-sm font-medium">{user?.name ?? "Administrador"}</p>
+                <p className="text-xs text-muted-foreground">{user?.email}</p>
+              </div>
+            </DropdownMenuLabel>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem>
+              <User className="mr-2 h-4 w-4" />
+              Perfil
+            </DropdownMenuItem>
+            <DropdownMenuItem>
+              <Settings className="mr-2 h-4 w-4" />
+              Configuración
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              className="text-destructive focus:text-destructive"
+              onClick={() => signOut({ callbackUrl: "/login" })}
+            >
+              <LogOut className="mr-2 h-4 w-4" />
+              Cerrar sesión
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+    </header>
+  )
+}
+```
+
+---
+
+### `src/app/(dashboard)/layout.tsx` — Layout protegido (CREAR)
+
+```tsx
+import { auth } from "@/lib/auth"
+import { redirect } from "next/navigation"
+import { Sidebar } from "@/components/layout/sidebar"
+import { Topbar } from "@/components/layout/topbar"
+
+export default async function DashboardLayout({
+  children,
+}: {
+  children: React.ReactNode
+}) {
+  const session = await auth()
+  if (!session) redirect("/login")
+
+  return (
+    <div className="flex h-screen overflow-hidden bg-background">
+      <Sidebar />
+      <div className="flex flex-col flex-1 min-w-0">
+        <Topbar user={session.user} />
+        <main className="flex-1 overflow-y-auto p-6">
+          {children}
+        </main>
+      </div>
+    </div>
+  )
+}
+```
+
+---
+
+### `src/components/dashboard/metric-card.tsx` — Card de métrica (CREAR)
+
+```tsx
+import { cn } from "@/lib/utils"
+import { LucideIcon } from "lucide-react"
+
+interface MetricCardProps {
+  title: string
+  value: string
+  subtitle?: string
+  icon: LucideIcon
+  trend?: "up" | "down" | "neutral"
+  className?: string
+}
+
+export function MetricCard({
+  title,
+  value,
+  subtitle,
+  icon: Icon,
+  trend = "neutral",
+  className,
+}: MetricCardProps) {
+  return (
+    <div className={cn(
+      "bg-card border border-border rounded-lg p-5 flex flex-col gap-4",
+      className
+    )}>
+      <div className="flex items-center justify-between">
+        <span className="text-sm text-muted-foreground font-medium">{title}</span>
+        <div className="w-8 h-8 rounded-md bg-primary/10 border border-primary/20 flex items-center justify-center">
+          <Icon className="w-4 h-4 text-primary" />
+        </div>
+      </div>
+      <div>
+        <p className="text-2xl font-semibold tracking-tight">{value}</p>
+        {subtitle && (
+          <p className={cn(
+            "text-xs mt-1",
+            trend === "up" && "text-primary",
+            trend === "down" && "text-destructive",
+            trend === "neutral" && "text-muted-foreground",
+          )}>
+            {subtitle}
+          </p>
+        )}
+      </div>
+    </div>
+  )
+}
+```
+
+---
+
+### `src/components/dashboard/services-status.tsx` — Estado de servicios (CREAR)
+
+```tsx
+import { cn } from "@/lib/utils"
+import { Badge } from "@/components/ui/badge"
+
+interface Service {
+  name: string
+  displayName: string
+  status: "running" | "stopped" | "unknown"
+}
+
+const mockServices: Service[] = [
+  { name: "nginx",   displayName: "Nginx",   status: "unknown" },
+  { name: "mysql",   displayName: "MySQL",   status: "unknown" },
+  { name: "postfix", displayName: "Postfix", status: "unknown" },
+  { name: "bind9",   displayName: "DNS",     status: "unknown" },
+]
+
+const statusConfig = {
+  running: { label: "Activo",   className: "bg-primary/10 text-primary border-primary/20" },
+  stopped: { label: "Detenido", className: "bg-destructive/10 text-destructive border-destructive/20" },
+  unknown: { label: "–",        className: "bg-muted text-muted-foreground border-border" },
+}
+
+export function ServicesStatus() {
+  return (
+    <div className="bg-card border border-border rounded-lg p-5">
+      <h3 className="text-sm font-medium text-muted-foreground mb-4">Estado de servicios</h3>
+      <div className="space-y-2">
+        {mockServices.map((svc) => {
+          const config = statusConfig[svc.status]
+          return (
+            <div key={svc.name} className="flex items-center justify-between py-1.5">
+              <div className="flex items-center gap-2">
+                <div className={cn(
+                  "w-1.5 h-1.5 rounded-full",
+                  svc.status === "running" && "bg-primary",
+                  svc.status === "stopped" && "bg-destructive",
+                  svc.status === "unknown" && "bg-muted-foreground",
+                )} />
+                <span className="text-sm">{svc.displayName}</span>
+              </div>
+              <Badge variant="outline" className={cn("text-[10px] h-5", config.className)}>
+                {config.label}
+              </Badge>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+```
+
+---
+
+### `src/app/(dashboard)/page.tsx` — Dashboard home (REEMPLAZAR placeholder)
+
+```tsx
+import { auth } from "@/lib/auth"
+import { MetricCard } from "@/components/dashboard/metric-card"
+import { ServicesStatus } from "@/components/dashboard/services-status"
+import { Cpu, HardDrive, Clock, MemoryStick } from "lucide-react"
+
+export default async function DashboardPage() {
+  const session = await auth()
+  const firstName = session?.user?.name?.split(" ")[0] ?? "Admin"
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-xl font-semibold">Hola, {firstName}</h1>
+        <p className="text-sm text-muted-foreground mt-1">
+          Resumen del servidor — métricas en tiempo real llegan en el Commit 3
+        </p>
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+        <MetricCard title="CPU"         value="–" subtitle="Sin datos aún" icon={Cpu} />
+        <MetricCard title="Memoria RAM" value="–" subtitle="Sin datos aún" icon={MemoryStick} />
+        <MetricCard title="Disco"       value="–" subtitle="Sin datos aún" icon={HardDrive} />
+        <MetricCard title="Uptime"      value="–" subtitle="Sin datos aún" icon={Clock} />
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <ServicesStatus />
+      </div>
+    </div>
+  )
+}
+```
+
+---
+
+### `scripts/create-admin.ts` — Crear usuario admin inicial (CREAR)
 
 ```typescript
 import { PrismaClient } from "@prisma/client"
-
-const globalForPrisma = globalThis as unknown as {
-  prisma: PrismaClient | undefined
-}
-
-export const prisma =
-  globalForPrisma.prisma ??
-  new PrismaClient({
-    log: process.env.NODE_ENV === "development" ? ["query", "error", "warn"] : ["error"],
-  })
-
-if (process.env.NODE_ENV !== "production") globalForPrisma.prisma = prisma
-```
-
----
-
-### `src/lib/utils.ts`
-
-```typescript
-import { clsx, type ClassValue } from "clsx"
-import { twMerge } from "tailwind-merge"
-
-export function cn(...inputs: ClassValue[]) {
-  return twMerge(clsx(inputs))
-}
-
-export function formatBytes(bytes: number, decimals = 2): string {
-  if (bytes === 0) return "0 Bytes"
-  const k = 1024
-  const dm = decimals < 0 ? 0 : decimals
-  const sizes = ["Bytes", "KB", "MB", "GB", "TB"]
-  const i = Math.floor(Math.log(bytes) / Math.log(k))
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + " " + sizes[i]
-}
-
-export function formatUptime(seconds: number): string {
-  const d = Math.floor(seconds / 86400)
-  const h = Math.floor((seconds % 86400) / 3600)
-  const m = Math.floor((seconds % 3600) / 60)
-  if (d > 0) return `${d}d ${h}h ${m}m`
-  if (h > 0) return `${h}h ${m}m`
-  return `${m}m`
-}
-```
-
----
-
-### `src/lib/auth.ts`
-
-```typescript
-import NextAuth from "next-auth"
-import Credentials from "next-auth/providers/credentials"
-import { prisma } from "./prisma"
 import bcrypt from "bcryptjs"
 
-export const { handlers, signIn, signOut, auth } = NextAuth({
-  providers: [
-    Credentials({
-      credentials: {
-        email: { label: "Email", type: "email" },
-        password: { label: "Password", type: "password" },
-      },
-      async authorize(credentials) {
-        if (!credentials?.email || !credentials?.password) return null
+const prisma = new PrismaClient()
 
-        const user = await prisma.user.findUnique({
-          where: { email: credentials.email as string },
-        })
+async function main() {
+  const email    = process.env.ADMIN_EMAIL    ?? "admin@tezcapanel.local"
+  const password = process.env.ADMIN_PASSWORD ?? "admin123"
+  const name     = process.env.ADMIN_NAME     ?? "Administrador"
 
-        if (!user) return null
-
-        const valid = await bcrypt.compare(
-          credentials.password as string,
-          user.password
-        )
-
-        if (!valid) return null
-
-        return {
-          id: user.id,
-          email: user.email,
-          name: user.name,
-          role: user.role,
-        }
-      },
-    }),
-  ],
-  pages: {
-    signIn: "/login",
-  },
-  session: {
-    strategy: "jwt",
-  },
-  callbacks: {
-    async jwt({ token, user }) {
-      if (user) {
-        token.id = user.id
-        token.role = (user as { role?: string }).role
-      }
-      return token
-    },
-    async session({ session, token }) {
-      if (token) {
-        session.user.id = token.id as string
-        session.user.role = token.role as string
-      }
-      return session
-    },
-  },
-})
-```
-
----
-
-### `src/lib/agent-client.ts`
-
-```typescript
-const AGENT_URL = process.env.AGENT_URL ?? "http://127.0.0.1:7070"
-const AGENT_TOKEN = process.env.AGENT_TOKEN ?? ""
-
-export interface ServerMetrics {
-  cpu: {
-    usage: number
-    cores: number
-    model: string
+  const existing = await prisma.user.findUnique({ where: { email } })
+  if (existing) {
+    console.log(`✔ Usuario ${email} ya existe`)
+    return
   }
-  memory: {
-    total: number
-    used: number
-    free: number
-  }
-  disk: {
-    total: number
-    used: number
-    free: number
-  }
-  uptime: number
-  hostname: string
-  os: string
-}
 
-export interface ServiceStatus {
-  name: string
-  status: "running" | "stopped" | "unknown"
-  pid?: number
-}
-
-export async function agentFetch<T>(
-  path: string,
-  options?: RequestInit
-): Promise<T> {
-  const res = await fetch(`${AGENT_URL}${path}`, {
-    ...options,
-    headers: {
-      Authorization: `Bearer ${AGENT_TOKEN}`,
-      "Content-Type": "application/json",
-      ...options?.headers,
-    },
-    signal: AbortSignal.timeout(5000),
+  const hashed = await bcrypt.hash(password, 12)
+  const user   = await prisma.user.create({
+    data: { email, password: hashed, name, role: "ADMIN" },
   })
 
-  if (!res.ok) {
-    throw new Error(`Agent error ${res.status}: ${await res.text()}`)
-  }
-
-  return res.json() as Promise<T>
+  console.log(`✔ Usuario admin creado: ${user.email}`)
+  console.log(`  Email:    ${email}`)
+  console.log(`  Password: ${password}`)
+  console.log(`  ⚠ Cambia la contraseña después del primer login`)
 }
 
-export const agentAPI = {
-  getMetrics: () => agentFetch<ServerMetrics>("/metrics"),
-  getServices: () => agentFetch<ServiceStatus[]>("/services"),
-  restartService: (name: string) =>
-    agentFetch<{ ok: boolean }>(`/services/${name}/restart`, { method: "POST" }),
-}
+main()
+  .catch(console.error)
+  .finally(() => prisma.$disconnect())
 ```
+
+Agregar a `package.json` en la sección `"scripts"`:
+
+```json
+"create-admin": "tsx scripts/create-admin.ts"
+```
+
+Instalar tsx: `npm install --save-dev tsx`
 
 ---
 
-### `src/types/index.ts`
-
-```typescript
-export type UserRole = "ADMIN" | "USER"
-
-export interface NavItem {
-  label: string
-  href: string
-  icon: string
-  badge?: string
-  proOnly?: boolean
-}
-
-export interface ServerMetrics {
-  cpu: { usage: number; cores: number; model: string }
-  memory: { total: number; used: number; free: number }
-  disk: { total: number; used: number; free: number }
-  uptime: number
-  hostname: string
-  os: string
-}
-
-export type ServiceStatus = "running" | "stopped" | "unknown"
-
-export interface Service {
-  name: string
-  displayName: string
-  status: ServiceStatus
-  pid?: number
-}
-```
-
----
-
-### `src/store/server.store.ts`
-
-```typescript
-import { create } from "zustand"
-import type { ServerMetrics, Service } from "@/types"
-
-interface ServerState {
-  metrics: ServerMetrics | null
-  services: Service[]
-  isLoading: boolean
-  lastUpdated: Date | null
-  error: string | null
-  setMetrics: (metrics: ServerMetrics) => void
-  setServices: (services: Service[]) => void
-  setLoading: (loading: boolean) => void
-  setError: (error: string | null) => void
-}
-
-export const useServerStore = create<ServerState>((set) => ({
-  metrics: null,
-  services: [],
-  isLoading: false,
-  lastUpdated: null,
-  error: null,
-  setMetrics: (metrics) => set({ metrics, lastUpdated: new Date(), error: null }),
-  setServices: (services) => set({ services }),
-  setLoading: (isLoading) => set({ isLoading }),
-  setError: (error) => set({ error, isLoading: false }),
-}))
-```
-
----
-
-### `src/components/layout/nav-items.ts`
-
-```typescript
-import type { NavItem } from "@/types"
-
-export const navItems: NavItem[] = [
-  { label: "Dashboard",      href: "/",          icon: "LayoutDashboard" },
-  { label: "Web",            href: "/web",        icon: "Globe" },
-  { label: "Bases de datos", href: "/databases",  icon: "Database" },
-  { label: "Correo",         href: "/mail",       icon: "Mail",    proOnly: true },
-  { label: "DNS",            href: "/dns",        icon: "Server",  proOnly: true },
-  { label: "Firewall",       href: "/firewall",   icon: "Shield",  proOnly: true },
-  { label: "Backups",        href: "/backups",    icon: "Archive", proOnly: true },
-  { label: "Terminal",       href: "/terminal",   icon: "Terminal" },
-  { label: "Usuarios",       href: "/users",      icon: "Users" },
-  { label: "Configuración",  href: "/settings",   icon: "Settings" },
-]
-```
-
----
-
-### `src/app/api/auth/[...nextauth]/route.ts`
-
-```typescript
-import { handlers } from "@/lib/auth"
-
-export const { GET, POST } = handlers
-```
-
----
-
-### `src/app/api/agent/[...route]/route.ts`
-
-```typescript
-import { auth } from "@/lib/auth"
-import { NextRequest, NextResponse } from "next/server"
-
-const AGENT_URL = process.env.AGENT_URL ?? "http://127.0.0.1:7070"
-const AGENT_TOKEN = process.env.AGENT_TOKEN ?? ""
-
-export async function GET(
-  req: NextRequest,
-  { params }: { params: { route: string[] } }
-) {
-  const session = await auth()
-  if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
-
-  const path = "/" + params.route.join("/")
-
-  try {
-    const res = await fetch(`${AGENT_URL}${path}`, {
-      headers: { Authorization: `Bearer ${AGENT_TOKEN}` },
-      signal: AbortSignal.timeout(5000),
-    })
-    const data = await res.json()
-    return NextResponse.json(data)
-  } catch {
-    return NextResponse.json({ error: "Agent unavailable" }, { status: 503 })
-  }
-}
-
-export async function POST(
-  req: NextRequest,
-  { params }: { params: { route: string[] } }
-) {
-  const session = await auth()
-  if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
-
-  const path = "/" + params.route.join("/")
-  const body = await req.json().catch(() => ({}))
-
-  try {
-    const res = await fetch(`${AGENT_URL}${path}`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${AGENT_TOKEN}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(5000),
-    })
-    const data = await res.json()
-    return NextResponse.json(data)
-  } catch {
-    return NextResponse.json({ error: "Agent unavailable" }, { status: 503 })
-  }
-}
-```
-
----
-
-### `src/app/(auth)/login/page.tsx`
-
-```typescript
-// Placeholder — se implementa en Commit 2
-export default function LoginPage() {
-  return (
-    <div className="flex min-h-screen items-center justify-center">
-      <p className="text-muted-foreground">Login — próximo commit</p>
-    </div>
-  )
-}
-```
-
----
-
-### `src/app/(dashboard)/page.tsx`
-
-```typescript
-// Placeholder — se implementa en Commit 2
-export default function DashboardPage() {
-  return (
-    <div className="p-8">
-      <h1 className="text-2xl font-bold">Tezcapanel</h1>
-      <p className="text-muted-foreground mt-2">Dashboard — próximo commit</p>
-    </div>
-  )
-}
-```
-
----
-
-### `src/app/(dashboard)/web/page.tsx`
-
-```typescript
-export default function WebPage() {
-  return <div className="p-8"><h1 className="text-xl font-bold">Web</h1></div>
-}
-```
-
----
-
-### `src/app/(dashboard)/databases/page.tsx`
-
-```typescript
-export default function DatabasesPage() {
-  return <div className="p-8"><h1 className="text-xl font-bold">Bases de datos</h1></div>
-}
-```
-
----
-
-### `src/app/(dashboard)/mail/page.tsx`
-
-```typescript
-export default function MailPage() {
-  return <div className="p-8"><h1 className="text-xl font-bold">Correo</h1></div>
-}
-```
-
----
-
-### `src/app/(dashboard)/dns/page.tsx`
-
-```typescript
-export default function DnsPage() {
-  return <div className="p-8"><h1 className="text-xl font-bold">DNS</h1></div>
-}
-```
-
----
-
-### `agent/go.mod`
-
-```
-module github.com/Xolotl-Company/tezcapanel/agent
-
-go 1.22
-
-require (
-  github.com/go-chi/chi/v5 v5.0.12
-  github.com/shirou/gopsutil/v3 v3.24.1
-)
-```
-
----
-
-### `agent/main.go`
-
-```go
-package main
-
-import (
-	"encoding/json"
-	"fmt"
-	"log"
-	"net/http"
-	"os"
-
-	"github.com/go-chi/chi/v5"
-	"github.com/go-chi/chi/v5/middleware"
-)
-
-var agentToken string
-
-func main() {
-	agentToken = os.Getenv("AGENT_TOKEN")
-	if agentToken == "" {
-		log.Fatal("AGENT_TOKEN no definido")
-	}
-
-	r := chi.NewRouter()
-	r.Use(middleware.Logger)
-	r.Use(middleware.Recoverer)
-	r.Use(authMiddleware)
-
-	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
-	})
-
-	r.Get("/metrics", getMetrics)
-	r.Get("/services", getServices)
-	r.Post("/services/{name}/restart", restartService)
-
-	addr := "127.0.0.1:7070"
-	fmt.Printf("tezcaagent corriendo en %s\n", addr)
-	log.Fatal(http.ListenAndServe(addr, r))
-}
-```
-
----
-
-### `agent/middleware/auth.go`
-
-```go
-package main
-
-import (
-	"net/http"
-	"strings"
-)
-
-func authMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-		if token != agentToken {
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
-}
-```
-
----
-
-### `agent/handlers/metrics.go`
-
-```go
-package main
-
-import (
-	"encoding/json"
-	"net/http"
-	"runtime"
-	"time"
-
-	"github.com/go-chi/chi/v5"
-)
-
-type Metrics struct {
-	CPU    CPUInfo  `json:"cpu"`
-	Memory MemInfo  `json:"memory"`
-	Disk   DiskInfo `json:"disk"`
-	Uptime int64    `json:"uptime"`
-	Host   string   `json:"hostname"`
-	OS     string   `json:"os"`
-}
-
-type CPUInfo  struct { Usage float64 `json:"usage"`; Cores int    `json:"cores"`; Model string `json:"model"` }
-type MemInfo  struct { Total uint64  `json:"total"`; Used  uint64 `json:"used"`;  Free  uint64 `json:"free"` }
-type DiskInfo struct { Total uint64  `json:"total"`; Used  uint64 `json:"used"`;  Free  uint64 `json:"free"` }
-
-var startTime = time.Now()
-
-func getMetrics(w http.ResponseWriter, r *http.Request) {
-	// Stub — Commit 3 integra gopsutil para datos reales del sistema
-	m := Metrics{
-		CPU:    CPUInfo{Usage: 0, Cores: runtime.NumCPU(), Model: "Unknown"},
-		Memory: MemInfo{},
-		Disk:   DiskInfo{},
-		Uptime: int64(time.Since(startTime).Seconds()),
-		Host:   "localhost",
-		OS:     runtime.GOOS,
-	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(m)
-}
-
-func getServices(w http.ResponseWriter, r *http.Request) {
-	services := []map[string]string{
-		{"name": "nginx",  "status": "unknown"},
-		{"name": "mysql",  "status": "unknown"},
-	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(services)
-}
-
-func restartService(w http.ResponseWriter, r *http.Request) {
-	_ = chi.URLParam(r, "name")
-	// TODO Commit 3: ejecutar systemctl restart {name}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]bool{"ok": true})
-}
-```
-
----
-
-### `agent/systemd/tezcaagent.service`
-
-```ini
-[Unit]
-Description=Tezcapanel Agent
-After=network.target
-
-[Service]
-Type=simple
-User=root
-WorkingDirectory=/opt/tezcapanel/agent
-ExecStart=/opt/tezcapanel/agent/tezcaagent
-Restart=always
-RestartSec=5
-Environment=AGENT_TOKEN=REEMPLAZA_CON_TU_TOKEN
-
-[Install]
-WantedBy=multi-user.target
-```
-
----
-
-## Paso 4 — Verificación
-
-Una vez creados todos los archivos, ejecuta:
+## Paso final — Verificación y commit
 
 ```bash
+# 1. Dependencias nuevas
+npm install geist
+npm install --save-dev tsx
+
+# 2. Migrar DB si no se hizo antes
 npx prisma migrate dev --name init
 npx prisma generate
+
+# 3. Crear usuario admin
+npm run create-admin
+
+# 4. Verificar sin errores TypeScript
 npm run build
-```
 
-No debe haber errores de TypeScript ni de compilación.
-
----
-
-## Paso 5 — Commit
-
-```bash
+# 5. Commit
 git add .
-git commit -m "chore: setup core dependencies and project structure"
+git commit -m "feat: auth system and dashboard layout"
 ```
 
 ---
 
 ## Notas para el agente
 
-- El archivo `.env` **nunca** se commitea. Verificar que esté en `.gitignore`.
-- Los archivos placeholder en `(dashboard)` y `(auth)` son temporales. Se reemplazarán en el Commit 2.
-- El directorio `agent/` es un módulo Go independiente. No forma parte del build de Next.js.
-- `src/lib/utils.ts` puede sobreescribir el `utils.ts` que genera shadcn — es intencional, el contenido es compatible.
-- Todos los imports usan el alias `@/` que ya está configurado en `tsconfig.json`.
+- `next-auth`, `prisma`, `zustand`, `shadcn/ui` ya están instalados del Commit 1. No reinstalar.
+- `globals.css` debe **reemplazarse completamente** — no hacer merge con el anterior.
+- `src/app/layout.tsx` debe **reemplazarse** — el boilerplate de create-next-app ya no sirve.
+- Si `src/lib/utils.ts` fue sobreescrito por shadcn, restaurar la versión del Commit 1 que incluye `formatBytes` y `formatUptime`.
+- Los módulos `web`, `databases`, `mail`, `dns` mantienen sus placeholders — no modificar.
+- Si `MemoryStick` no existe en la versión de lucide-react instalada, usar `Memory` como fallback.
+- El script `create-admin.ts` es solo para desarrollo. En producción el `install.sh` manejará esto.
