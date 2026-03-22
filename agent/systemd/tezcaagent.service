@@ -1,0 +1,15 @@
+[Unit]
+Description=Tezcapanel Agent
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/tezcapanel/agent
+ExecStart=/opt/tezcapanel/agent/tezcaagent
+Restart=always
+RestartSec=5
+Environment=AGENT_TOKEN=REEMPLAZA_CON_TU_TOKEN
+
+[Install]
+WantedBy=multi-user.target
