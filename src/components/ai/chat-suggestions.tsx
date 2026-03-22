@@ -22,7 +22,7 @@ export function ChatSuggestions({ onSelect }: ChatSuggestionsProps) {
   return (
     <div className="p-4 space-y-3">
       <p className="text-xs text-muted-foreground text-center">
-        Hola, soy <strong className="text-primary">Tezca</strong> — tu asistente de servidor.
+        Hola, soy <strong className="text-primary">Byte</strong> — tu asistente de servidor.
         ¿En qué te ayudo?
       </p>
       <div className="grid grid-cols-2 gap-2">

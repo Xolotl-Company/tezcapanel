@@ -91,7 +91,7 @@ export default function AIPage() {
           </div>
           <div>
             <div className="flex items-center gap-2">
-              <h1 className="text-lg font-semibold">Tezca AI</h1>
+              <h1 className="text-lg font-semibold">Byte AI</h1>
               <Badge variant="outline" className="border-accent/50 text-accent text-[10px]">PRO</Badge>
             </div>
             <p className="text-xs text-muted-foreground">Asistente inteligente de servidor</p>

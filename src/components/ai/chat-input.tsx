@@ -34,7 +34,7 @@ export function ChatInput({ onSend, isLoading, disabled }: ChatInputProps) {
       <Textarea
         ref={textareaRef}
         value={value}
-        onChange={(e) => setValue(e.target.value)}
+        onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setValue(e.target.value)}
         onKeyDown={handleKeyDown}
         placeholder="Pregunta algo o pide que haga algo en tu servidor..."
         className="min-h-[44px] max-h-[120px] resize-none bg-input border-border text-sm"
