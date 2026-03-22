@@ -144,7 +144,7 @@ start_service() {
 }
 
 # NGINX
-ssetup_nginx() {
+setup_nginx() {
   log "Configurando NGINX..."
 
   if [ -d "/etc/nginx/sites-available" ]; then
