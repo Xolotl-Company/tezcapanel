@@ -43,13 +43,13 @@ export function Sidebar() {
             return (
               <Link
                 key={item.href}
-                href={item.proOnly ? "#" : item.href}
+                href={item.href}
                 className={cn(
                   "flex items-center gap-3 px-3 py-2 rounded-md text-sm transition-colors group",
                   isActive
                     ? "bg-primary/10 text-primary font-medium"
                     : "text-muted-foreground hover:text-foreground hover:bg-secondary",
-                  item.proOnly && "opacity-50 cursor-not-allowed"
+                  item.proOnly && "opacity-60"
                 )}
               >
                 <Icon className={cn(

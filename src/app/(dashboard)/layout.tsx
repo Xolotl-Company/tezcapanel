@@ -2,6 +2,7 @@ import { auth } from "@/lib/auth"
 import { redirect } from "next/navigation"
 import { Sidebar } from "@/components/layout/sidebar"
 import { Topbar } from "@/components/layout/topbar"
+import { MetricsProvider } from "@/components/dashboard/metrics-provider"
 
 export default async function DashboardLayout({
   children,
@@ -17,7 +18,9 @@ export default async function DashboardLayout({
       <div className="flex flex-col flex-1 min-w-0">
         <Topbar user={session.user} />
         <main className="flex-1 overflow-y-auto p-6">
-          {children}
+          <MetricsProvider>
+            {children}
+          </MetricsProvider>
         </main>
       </div>
     </div>

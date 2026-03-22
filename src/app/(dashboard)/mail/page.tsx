@@ -1,3 +1,5 @@
+import { ProGate } from "@/components/dashboard/pro-gate"
+
 export default function MailPage() {
-  return <div className="p-8"><h1 className="text-xl font-bold">Correo</h1></div>
+  return <ProGate module="Correo electrónico" description="Gestiona cuentas, aliases, DKIM/SPF y cuotas desde el panel." />
 }

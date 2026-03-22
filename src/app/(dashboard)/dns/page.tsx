@@ -1,3 +1,5 @@
+import { ProGate } from "@/components/dashboard/pro-gate"
+
 export default function DnsPage() {
-  return <div className="p-8"><h1 className="text-xl font-bold">DNS</h1></div>
+  return <ProGate module="DNS" description="Administra zonas DNS y registros A, MX, TXT, CNAME con editor visual." />
 }

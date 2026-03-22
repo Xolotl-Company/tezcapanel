@@ -1,414 +1,308 @@
-# Tezcapanel — Agent Instructions (Commit 2)
+# Tezcapanel — Agent Instructions (Commit 3)
 
 ## Objetivo
 
-Implementar el sistema de autenticación completo y el layout del dashboard con sidebar.
-Al terminar este commit, el panel debe tener: página de login funcional, sesiones JWT,
-rutas protegidas, sidebar de navegación, topbar, y el dashboard home con métricas placeholder.
+1. Crear el agente del servidor en Node.js con métricas reales (CPU, RAM, disco, uptime)
+2. Conectar métricas al dashboard con auto-refresh cada 5 segundos
+3. Crear páginas faltantes que dan 404: Terminal, Usuarios, Configuración
+4. Agregar página ProGate para módulos PRO bloqueados (Correo, DNS, Firewall, Backups)
+5. Dar contenido básico a módulos Community: Web, Bases de datos
 
 ---
 
-## Contexto del proyecto
+## Contexto
 
 - **Stack:** Next.js 15, TypeScript, Tailwind CSS, shadcn/ui, NextAuth v5, Prisma + SQLite, Zustand
-- **Identidad visual:** Panel de servidores con estética inspirada en cultura prehispánica mexicana.
-  Nombre "Tezcapanel" viene de Tezcatlipoca. Paleta: negro profundo, verde esmeralda (`#10B981`),
-  gris carbón, acentos en ámbar/dorado. Tipografía seria pero moderna. Dark mode por defecto.
-- **Commit anterior:** Ya existe toda la estructura de carpetas, dependencias instaladas,
-  `src/lib/auth.ts`, `src/lib/prisma.ts`, `src/lib/utils.ts`, `src/lib/agent-client.ts`,
-  `src/store/server.store.ts`, `src/types/index.ts`, `src/components/layout/nav-items.ts`
+- **Agente:** Node.js con `systeminformation` — vive en `/agent` como proceso independiente
+- **Puerto agente:** 7070 (localhost only)
+- **Problema actual:** Terminal, Usuarios, Configuración dan 404. Web y Bases de datos vacías.
+  Módulos PRO redirigen a `#` sin página propia. Dashboard muestra "–" en todas las métricas.
+- **IMPORTANTE:** No modificar nada fuera de los archivos listados aquí.
 
 ---
 
-## Archivos a crear / modificar
+## Parte 1 — Agente Node.js
 
----
+### Instalar dependencia del agente
 
-### `src/app/layout.tsx` — Root layout (MODIFICAR el existente)
+Ejecutar en la raíz del proyecto:
 
-```tsx
-import type { Metadata } from "next"
-import { GeistSans } from "geist/font/sans"
-import { GeistMono } from "geist/font/mono"
-import "./globals.css"
-import { Toaster } from "@/components/ui/toaster"
-
-export const metadata: Metadata = {
-  title: "Tezcapanel",
-  description: "Panel de administración de servidores",
-}
-
-export default function RootLayout({
-  children,
-}: {
-  children: React.ReactNode
-}) {
-  return (
-    <html lang="es" className="dark">
-      <body className={`${GeistSans.variable} ${GeistMono.variable} font-sans antialiased bg-background text-foreground`}>
-        {children}
-        <Toaster />
-      </body>
-    </html>
-  )
-}
+```bash
+npm install systeminformation
 ```
 
-> Instala Geist si no está: `npm install geist`
-
 ---
 
-### `src/app/globals.css` — Design tokens (REEMPLAZAR contenido completo)
+### `agent/server.js` — CREAR
 
-```css
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+```js
+const http = require("http")
+const si = require("systeminformation")
 
-@layer base {
-  :root {
-    --background: 0 0% 5%;
-    --foreground: 0 0% 95%;
-    --card: 0 0% 8%;
-    --card-foreground: 0 0% 95%;
-    --popover: 0 0% 8%;
-    --popover-foreground: 0 0% 95%;
-    --primary: 160 84% 39%;
-    --primary-foreground: 0 0% 100%;
-    --secondary: 0 0% 12%;
-    --secondary-foreground: 0 0% 85%;
-    --muted: 0 0% 12%;
-    --muted-foreground: 0 0% 50%;
-    --accent: 43 96% 56%;
-    --accent-foreground: 0 0% 5%;
-    --destructive: 0 72% 51%;
-    --destructive-foreground: 0 0% 100%;
-    --border: 0 0% 15%;
-    --input: 0 0% 12%;
-    --ring: 160 84% 39%;
-    --radius: 0.5rem;
-    --sidebar-width: 240px;
+const PORT = 7070
+const HOST = "127.0.0.1"
+const TOKEN = process.env.AGENT_TOKEN
+
+if (!TOKEN) {
+  console.error("❌ AGENT_TOKEN no definido — exporta la variable de entorno")
+  process.exit(1)
+}
+
+// --- Auth helper ---
+function isAuthorized(req) {
+  const auth = req.headers["authorization"] ?? ""
+  return auth === `Bearer ${TOKEN}`
+}
+
+// --- CORS + JSON headers ---
+function setHeaders(res) {
+  res.setHeader("Content-Type", "application/json")
+  res.setHeader("Access-Control-Allow-Origin", "http://localhost:3000")
+  res.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type")
+}
+
+// --- Handlers ---
+async function handleMetrics(res) {
+  const [cpuData, cpuLoad, mem, disk, osInfo] = await Promise.all([
+    si.cpu(),
+    si.currentLoad(),
+    si.mem(),
+    si.fsSize(),
+    si.osInfo(),
+  ])
+
+  const rootDisk = disk.find((d) => d.mount === "/") ?? disk[0] ?? {}
+
+  const metrics = {
+    cpu: {
+      usage: parseFloat((cpuLoad.currentLoad ?? 0).toFixed(1)),
+      cores: cpuData.cores ?? 1,
+      model: `${cpuData.manufacturer} ${cpuData.brand}`.trim() || "Unknown",
+    },
+    memory: {
+      total: mem.total ?? 0,
+      used: mem.used ?? 0,
+      free: mem.free ?? 0,
+    },
+    disk: {
+      total: rootDisk.size ?? 0,
+      used: rootDisk.used ?? 0,
+      free: (rootDisk.size ?? 0) - (rootDisk.used ?? 0),
+    },
+    uptime: Math.floor(si.time().uptime ?? 0),
+    hostname: osInfo.hostname ?? "localhost",
+    os: `${osInfo.distro ?? osInfo.platform} ${osInfo.release ?? ""}`.trim(),
   }
+
+  res.end(JSON.stringify(metrics))
 }
 
-@layer base {
-  * { @apply border-border; }
-  body { @apply bg-background text-foreground; }
+async function handleServices(res) {
+  const processes = await si.processes()
+  const running = new Set(
+    processes.list.map((p) => p.name.toLowerCase())
+  )
 
-  ::-webkit-scrollbar { width: 6px; height: 6px; }
-  ::-webkit-scrollbar-track { @apply bg-background; }
-  ::-webkit-scrollbar-thumb { @apply bg-border rounded-full; }
-  ::-webkit-scrollbar-thumb:hover { @apply bg-muted-foreground; }
+  const targets = [
+    { name: "nginx",   check: "nginx" },
+    { name: "mysql",   check: "mysqld" },
+    { name: "postfix", check: "postfix" },
+    { name: "named",   check: "named" },
+  ]
+
+  const services = targets.map(({ name, check }) => ({
+    name,
+    status: running.has(check) ? "running" : "stopped",
+  }))
+
+  res.end(JSON.stringify(services))
 }
-```
 
----
+async function handleRestartService(name, res) {
+  const allowed = ["nginx", "mysql", "postfix", "named"]
+  if (!allowed.includes(name)) {
+    res.writeHead(400)
+    res.end(JSON.stringify({ error: "service not allowed" }))
+    return
+  }
+  // TODO: ejecutar systemctl restart {name} con validación adicional
+  res.end(JSON.stringify({ ok: true }))
+}
 
-### `src/app/(auth)/login/page.tsx` — Página de login (REEMPLAZAR placeholder)
+// --- Router ---
+const server = http.createServer(async (req, res) => {
+  setHeaders(res)
 
-```tsx
-"use client"
+  // OPTIONS preflight
+  if (req.method === "OPTIONS") {
+    res.writeHead(204)
+    res.end()
+    return
+  }
 
-import { useState } from "react"
-import { signIn } from "next-auth/react"
-import { useRouter } from "next/navigation"
-import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { useToast } from "@/hooks/use-toast"
-import { Loader2, Shield } from "lucide-react"
+  // Auth check
+  if (!isAuthorized(req)) {
+    res.writeHead(401)
+    res.end(JSON.stringify({ error: "unauthorized" }))
+    return
+  }
 
-export default function LoginPage() {
-  const router = useRouter()
-  const { toast } = useToast()
-  const [loading, setLoading] = useState(false)
-  const [form, setForm] = useState({ email: "", password: "" })
+  const url = req.url ?? "/"
+  const method = req.method ?? "GET"
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault()
-    setLoading(true)
+  try {
+    if (method === "GET" && url === "/health") {
+      res.end(JSON.stringify({ status: "ok", version: "0.1.0" }))
 
-    const result = await signIn("credentials", {
-      email: form.email,
-      password: form.password,
-      redirect: false,
-    })
+    } else if (method === "GET" && url === "/metrics") {
+      await handleMetrics(res)
 
-    if (result?.error) {
-      toast({
-        variant: "destructive",
-        title: "Credenciales incorrectas",
-        description: "Verifica tu email y contraseña.",
-      })
-      setLoading(false)
-      return
+    } else if (method === "GET" && url === "/services") {
+      await handleServices(res)
+
+    } else if (method === "POST" && url.startsWith("/services/") && url.endsWith("/restart")) {
+      const name = url.split("/")[2]
+      await handleRestartService(name, res)
+
+    } else {
+      res.writeHead(404)
+      res.end(JSON.stringify({ error: "not found" }))
     }
+  } catch (err) {
+    console.error("Agent error:", err)
+    res.writeHead(500)
+    res.end(JSON.stringify({ error: "internal error" }))
+  }
+})
 
-    router.push("/")
-    router.refresh()
+server.listen(PORT, HOST, () => {
+  console.log(`✔ tezcaagent v0.1.0 escuchando en http://${HOST}:${PORT}`)
+})
+```
+
+---
+
+### `agent/package.json` — CREAR
+
+```json
+{
+  "name": "tezcaagent",
+  "version": "0.1.0",
+  "description": "Tezcapanel server agent",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "dependencies": {
+    "systeminformation": "*"
+  }
+}
+```
+
+---
+
+### Agregar script al `package.json` raíz
+
+En la sección `"scripts"` del `package.json` de la raíz, agregar:
+
+```json
+"agent": "AGENT_TOKEN=$AGENT_TOKEN node agent/server.js",
+"agent:dev": "AGENT_TOKEN=$AGENT_TOKEN node --watch agent/server.js"
+```
+
+---
+
+## Parte 2 — API route de métricas
+
+### `src/app/api/metrics/route.ts` — CREAR
+
+```ts
+import { auth } from "@/lib/auth"
+import { NextResponse } from "next/server"
+
+const AGENT_URL = process.env.AGENT_URL ?? "http://127.0.0.1:7070"
+const AGENT_TOKEN = process.env.AGENT_TOKEN ?? ""
+
+export async function GET() {
+  const session = await auth()
+  if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+
+  try {
+    const [metricsRes, servicesRes] = await Promise.all([
+      fetch(`${AGENT_URL}/metrics`, {
+        headers: { Authorization: `Bearer ${AGENT_TOKEN}` },
+        signal: AbortSignal.timeout(3000),
+        cache: "no-store",
+      }),
+      fetch(`${AGENT_URL}/services`, {
+        headers: { Authorization: `Bearer ${AGENT_TOKEN}` },
+        signal: AbortSignal.timeout(3000),
+        cache: "no-store",
+      }),
+    ])
+
+    const metrics = await metricsRes.json()
+    const services = await servicesRes.json()
+
+    return NextResponse.json({ metrics, services })
+  } catch {
+    return NextResponse.json({ error: "agent_unavailable" }, { status: 503 })
+  }
+}
+```
+
+---
+
+## Parte 3 — Dashboard con métricas reales
+
+### `src/components/dashboard/metrics-provider.tsx` — CREAR
+
+```tsx
+"use client"
+
+import { useEffect } from "react"
+import { useServerStore } from "@/store/server.store"
+
+export function MetricsProvider({ children }: { children: React.ReactNode }) {
+  const { setMetrics, setServices, setLoading, setError } = useServerStore()
+
+  async function fetchMetrics() {
+    try {
+      const res = await fetch("/api/metrics")
+      if (!res.ok) {
+        setError(res.status === 503 ? "agent_unavailable" : "fetch_error")
+        return
+      }
+      const data = await res.json()
+      setMetrics(data.metrics)
+      setServices(data.services)
+    } catch {
+      setError("fetch_error")
+    }
   }
 
-  return (
-    <div className="min-h-screen bg-background flex items-center justify-center p-4">
-      {/* Grid de fondo */}
-      <div className="absolute inset-0 bg-[linear-gradient(to_right,#ffffff08_1px,transparent_1px),linear-gradient(to_bottom,#ffffff08_1px,transparent_1px)] bg-[size:48px_48px]" />
+  useEffect(() => {
+    setLoading(true)
+    fetchMetrics().finally(() => setLoading(false))
+    const interval = setInterval(fetchMetrics, 5000)
+    return () => clearInterval(interval)
+  }, [])
 
-      <div className="relative w-full max-w-sm">
-        {/* Glow verde */}
-        <div className="absolute -inset-px bg-gradient-to-b from-primary/20 to-transparent rounded-xl blur-sm" />
-
-        <div className="relative bg-card border border-border rounded-xl p-8 shadow-2xl">
-          {/* Icono */}
-          <div className="flex flex-col items-center mb-8">
-            <div className="w-12 h-12 rounded-lg bg-primary/10 border border-primary/30 flex items-center justify-center mb-4">
-              <Shield className="w-6 h-6 text-primary" />
-            </div>
-            <h1 className="text-xl font-semibold tracking-tight">Tezcapanel</h1>
-            <p className="text-sm text-muted-foreground mt-1">Accede a tu panel de control</p>
-          </div>
-
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="email">Email</Label>
-              <Input
-                id="email"
-                type="email"
-                placeholder="admin@servidor.com"
-                value={form.email}
-                onChange={(e) => setForm({ ...form, email: e.target.value })}
-                required
-                autoComplete="email"
-                className="bg-input border-border"
-              />
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="password">Contraseña</Label>
-              <Input
-                id="password"
-                type="password"
-                placeholder="••••••••"
-                value={form.password}
-                onChange={(e) => setForm({ ...form, password: e.target.value })}
-                required
-                autoComplete="current-password"
-                className="bg-input border-border"
-              />
-            </div>
-
-            <Button
-              type="submit"
-              className="w-full bg-primary hover:bg-primary/90 text-primary-foreground font-medium mt-2"
-              disabled={loading}
-            >
-              {loading ? (
-                <>
-                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                  Entrando...
-                </>
-              ) : (
-                "Entrar"
-              )}
-            </Button>
-          </form>
-        </div>
-
-        <p className="text-center text-xs text-muted-foreground mt-6">
-          Tezcapanel — Panel de administración de servidores
-        </p>
-      </div>
-    </div>
-  )
+  return <>{children}</>
 }
 ```
 
 ---
 
-### `src/components/layout/sidebar.tsx` — Sidebar (CREAR)
-
-```tsx
-"use client"
-
-import Link from "next/link"
-import { usePathname } from "next/navigation"
-import { navItems } from "./nav-items"
-import { cn } from "@/lib/utils"
-import { Badge } from "@/components/ui/badge"
-import {
-  LayoutDashboard, Globe, Database, Mail, Server,
-  Shield, Archive, Terminal, Users, Settings, ChevronRight,
-} from "lucide-react"
-
-const iconMap: Record<string, React.ElementType> = {
-  LayoutDashboard, Globe, Database, Mail, Server,
-  Shield, Archive, Terminal, Users, Settings,
-}
-
-export function Sidebar() {
-  const pathname = usePathname()
-
-  return (
-    <aside className="w-[var(--sidebar-width)] h-screen bg-card border-r border-border flex flex-col shrink-0">
-      {/* Logo */}
-      <div className="h-14 flex items-center gap-3 px-5 border-b border-border">
-        <div className="w-7 h-7 rounded-md bg-primary/10 border border-primary/30 flex items-center justify-center">
-          <Shield className="w-3.5 h-3.5 text-primary" />
-        </div>
-        <span className="font-semibold text-sm tracking-wide">Tezcapanel</span>
-        <Badge variant="secondary" className="ml-auto text-[10px] px-1.5 py-0 h-4">
-          Community
-        </Badge>
-      </div>
-
-      {/* Nav */}
-      <nav className="flex-1 overflow-y-auto py-3 px-2">
-        <div className="space-y-0.5">
-          {navItems.map((item) => {
-            const Icon = iconMap[item.icon] ?? ChevronRight
-            const isActive =
-              pathname === item.href ||
-              (item.href !== "/" && pathname.startsWith(item.href))
-
-            return (
-              <Link
-                key={item.href}
-                href={item.proOnly ? "#" : item.href}
-                className={cn(
-                  "flex items-center gap-3 px-3 py-2 rounded-md text-sm transition-colors group",
-                  isActive
-                    ? "bg-primary/10 text-primary font-medium"
-                    : "text-muted-foreground hover:text-foreground hover:bg-secondary",
-                  item.proOnly && "opacity-50 cursor-not-allowed"
-                )}
-              >
-                <Icon className={cn(
-                  "w-4 h-4 shrink-0 transition-colors",
-                  isActive
-                    ? "text-primary"
-                    : "text-muted-foreground group-hover:text-foreground"
-                )} />
-                <span className="flex-1">{item.label}</span>
-                {item.proOnly && (
-                  <Badge
-                    variant="outline"
-                    className="text-[9px] px-1 py-0 h-3.5 border-accent/50 text-accent"
-                  >
-                    PRO
-                  </Badge>
-                )}
-              </Link>
-            )
-          })}
-        </div>
-      </nav>
-
-      {/* Footer */}
-      <div className="p-3 border-t border-border">
-        <div className="flex items-center gap-2 px-3 py-2 rounded-md bg-secondary/50">
-          <div className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" />
-          <span className="text-xs text-muted-foreground">Servidor activo</span>
-        </div>
-      </div>
-    </aside>
-  )
-}
-```
-
----
-
-### `src/components/layout/topbar.tsx` — Topbar (CREAR)
-
-```tsx
-"use client"
-
-import { signOut } from "next-auth/react"
-import { Button } from "@/components/ui/button"
-import { Avatar, AvatarFallback } from "@/components/ui/avatar"
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
-import { Bell, LogOut, Settings, User } from "lucide-react"
-
-interface TopbarProps {
-  user?: { name?: string | null; email?: string | null }
-}
-
-export function Topbar({ user }: TopbarProps) {
-  const initials = user?.name
-    ? user.name.split(" ").map((n) => n[0]).join("").toUpperCase().slice(0, 2)
-    : user?.email?.[0].toUpperCase() ?? "U"
-
-  return (
-    <header className="h-14 border-b border-border bg-card flex items-center justify-between px-6 shrink-0">
-      <div className="flex items-center gap-2">
-        <span className="text-sm text-muted-foreground">Panel de control</span>
-      </div>
-
-      <div className="flex items-center gap-2">
-        <Button
-          variant="ghost"
-          size="icon"
-          className="w-8 h-8 text-muted-foreground hover:text-foreground"
-        >
-          <Bell className="w-4 h-4" />
-        </Button>
-
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="ghost" className="h-8 w-8 rounded-full p-0">
-              <Avatar className="h-8 w-8">
-                <AvatarFallback className="bg-primary/10 text-primary text-xs font-semibold border border-primary/20">
-                  {initials}
-                </AvatarFallback>
-              </Avatar>
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-48">
-            <DropdownMenuLabel className="font-normal">
-              <div className="flex flex-col space-y-1">
-                <p className="text-sm font-medium">{user?.name ?? "Administrador"}</p>
-                <p className="text-xs text-muted-foreground">{user?.email}</p>
-              </div>
-            </DropdownMenuLabel>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem>
-              <User className="mr-2 h-4 w-4" />
-              Perfil
-            </DropdownMenuItem>
-            <DropdownMenuItem>
-              <Settings className="mr-2 h-4 w-4" />
-              Configuración
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem
-              className="text-destructive focus:text-destructive"
-              onClick={() => signOut({ callbackUrl: "/login" })}
-            >
-              <LogOut className="mr-2 h-4 w-4" />
-              Cerrar sesión
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </div>
-    </header>
-  )
-}
-```
-
----
-
-### `src/app/(dashboard)/layout.tsx` — Layout protegido (CREAR)
+### `src/app/(dashboard)/layout.tsx` — REEMPLAZAR
 
 ```tsx
 import { auth } from "@/lib/auth"
 import { redirect } from "next/navigation"
 import { Sidebar } from "@/components/layout/sidebar"
 import { Topbar } from "@/components/layout/topbar"
+import { MetricsProvider } from "@/components/dashboard/metrics-provider"
 
 export default async function DashboardLayout({
   children,
@@ -424,7 +318,9 @@ export default async function DashboardLayout({
       <div className="flex flex-col flex-1 min-w-0">
         <Topbar user={session.user} />
         <main className="flex-1 overflow-y-auto p-6">
-          {children}
+          <MetricsProvider>
+            {children}
+          </MetricsProvider>
         </main>
       </div>
     </div>
@@ -434,104 +330,54 @@ export default async function DashboardLayout({
 
 ---
 
-### `src/components/dashboard/metric-card.tsx` — Card de métrica (CREAR)
+### `src/components/dashboard/services-status-live.tsx` — CREAR
 
 ```tsx
-import { cn } from "@/lib/utils"
-import { LucideIcon } from "lucide-react"
+"use client"
 
-interface MetricCardProps {
-  title: string
-  value: string
-  subtitle?: string
-  icon: LucideIcon
-  trend?: "up" | "down" | "neutral"
-  className?: string
-}
-
-export function MetricCard({
-  title,
-  value,
-  subtitle,
-  icon: Icon,
-  trend = "neutral",
-  className,
-}: MetricCardProps) {
-  return (
-    <div className={cn(
-      "bg-card border border-border rounded-lg p-5 flex flex-col gap-4",
-      className
-    )}>
-      <div className="flex items-center justify-between">
-        <span className="text-sm text-muted-foreground font-medium">{title}</span>
-        <div className="w-8 h-8 rounded-md bg-primary/10 border border-primary/20 flex items-center justify-center">
-          <Icon className="w-4 h-4 text-primary" />
-        </div>
-      </div>
-      <div>
-        <p className="text-2xl font-semibold tracking-tight">{value}</p>
-        {subtitle && (
-          <p className={cn(
-            "text-xs mt-1",
-            trend === "up" && "text-primary",
-            trend === "down" && "text-destructive",
-            trend === "neutral" && "text-muted-foreground",
-          )}>
-            {subtitle}
-          </p>
-        )}
-      </div>
-    </div>
-  )
-}
-```
-
----
-
-### `src/components/dashboard/services-status.tsx` — Estado de servicios (CREAR)
-
-```tsx
+import { useServerStore } from "@/store/server.store"
 import { cn } from "@/lib/utils"
 import { Badge } from "@/components/ui/badge"
 
-interface Service {
-  name: string
-  displayName: string
-  status: "running" | "stopped" | "unknown"
+const displayNames: Record<string, string> = {
+  nginx:   "Nginx",
+  mysql:   "MySQL",
+  postfix: "Postfix",
+  named:   "DNS (bind9)",
 }
 
-const mockServices: Service[] = [
-  { name: "nginx",   displayName: "Nginx",   status: "unknown" },
-  { name: "mysql",   displayName: "MySQL",   status: "unknown" },
-  { name: "postfix", displayName: "Postfix", status: "unknown" },
-  { name: "bind9",   displayName: "DNS",     status: "unknown" },
-]
-
 const statusConfig = {
-  running: { label: "Activo",   className: "bg-primary/10 text-primary border-primary/20" },
-  stopped: { label: "Detenido", className: "bg-destructive/10 text-destructive border-destructive/20" },
-  unknown: { label: "–",        className: "bg-muted text-muted-foreground border-border" },
+  running: { label: "Activo",   dot: "bg-primary animate-pulse",     badge: "bg-primary/10 text-primary border-primary/20" },
+  stopped: { label: "Detenido", dot: "bg-destructive",               badge: "bg-destructive/10 text-destructive border-destructive/20" },
+  unknown: { label: "–",        dot: "bg-muted-foreground",          badge: "bg-muted text-muted-foreground border-border" },
 }
 
 export function ServicesStatus() {
+  const { services } = useServerStore()
+
+  const list = services.length > 0
+    ? services
+    : [
+        { name: "nginx",   status: "unknown" },
+        { name: "mysql",   status: "unknown" },
+        { name: "postfix", status: "unknown" },
+        { name: "named",   status: "unknown" },
+      ]
+
   return (
     <div className="bg-card border border-border rounded-lg p-5">
       <h3 className="text-sm font-medium text-muted-foreground mb-4">Estado de servicios</h3>
       <div className="space-y-2">
-        {mockServices.map((svc) => {
-          const config = statusConfig[svc.status]
+        {list.map((svc) => {
+          const status = svc.status as keyof typeof statusConfig
+          const config = statusConfig[status] ?? statusConfig.unknown
           return (
             <div key={svc.name} className="flex items-center justify-between py-1.5">
               <div className="flex items-center gap-2">
-                <div className={cn(
-                  "w-1.5 h-1.5 rounded-full",
-                  svc.status === "running" && "bg-primary",
-                  svc.status === "stopped" && "bg-destructive",
-                  svc.status === "unknown" && "bg-muted-foreground",
-                )} />
-                <span className="text-sm">{svc.displayName}</span>
+                <div className={cn("w-1.5 h-1.5 rounded-full", config.dot)} />
+                <span className="text-sm">{displayNames[svc.name] ?? svc.name}</span>
               </div>
-              <Badge variant="outline" className={cn("text-[10px] h-5", config.className)}>
+              <Badge variant="outline" className={cn("text-[10px] h-5", config.badge)}>
                 {config.label}
               </Badge>
             </div>
@@ -545,32 +391,73 @@ export function ServicesStatus() {
 
 ---
 
-### `src/app/(dashboard)/page.tsx` — Dashboard home (REEMPLAZAR placeholder)
+### `src/app/(dashboard)/page.tsx` — REEMPLAZAR
 
 ```tsx
-import { auth } from "@/lib/auth"
+"use client"
+
+import { useServerStore } from "@/store/server.store"
 import { MetricCard } from "@/components/dashboard/metric-card"
-import { ServicesStatus } from "@/components/dashboard/services-status"
+import { ServicesStatus } from "@/components/dashboard/services-status-live"
+import { formatBytes, formatUptime } from "@/lib/utils"
 import { Cpu, HardDrive, Clock, MemoryStick } from "lucide-react"
 
-export default async function DashboardPage() {
-  const session = await auth()
-  const firstName = session?.user?.name?.split(" ")[0] ?? "Admin"
+export default function DashboardPage() {
+  const { metrics, error } = useServerStore()
+
+  const cpuValue    = metrics ? `${metrics.cpu.usage.toFixed(1)}%` : "–"
+  const ramValue    = metrics ? formatBytes(metrics.memory.used) : "–"
+  const diskValue   = metrics ? formatBytes(metrics.disk.used) : "–"
+  const uptimeValue = metrics ? formatUptime(metrics.uptime) : "–"
+
+  const ramSubtitle  = metrics
+    ? `de ${formatBytes(metrics.memory.total)} total`
+    : error === "agent_unavailable" ? "Agente no disponible" : "Conectando..."
+
+  const diskSubtitle = metrics
+    ? `de ${formatBytes(metrics.disk.total)} total`
+    : ""
 
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-xl font-semibold">Hola, {firstName}</h1>
+        <h1 className="text-xl font-semibold">
+          {metrics?.hostname ?? "Panel de control"}
+        </h1>
         <p className="text-sm text-muted-foreground mt-1">
-          Resumen del servidor — métricas en tiempo real llegan en el Commit 3
+          {metrics?.os ?? "Conectando con el servidor..."}
         </p>
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-        <MetricCard title="CPU"         value="–" subtitle="Sin datos aún" icon={Cpu} />
-        <MetricCard title="Memoria RAM" value="–" subtitle="Sin datos aún" icon={MemoryStick} />
-        <MetricCard title="Disco"       value="–" subtitle="Sin datos aún" icon={HardDrive} />
-        <MetricCard title="Uptime"      value="–" subtitle="Sin datos aún" icon={Clock} />
+        <MetricCard
+          title="CPU"
+          value={cpuValue}
+          subtitle={metrics ? `${metrics.cpu.cores} núcleos` : "–"}
+          icon={Cpu}
+          trend={metrics && metrics.cpu.usage > 80 ? "down" : "neutral"}
+        />
+        <MetricCard
+          title="Memoria RAM"
+          value={ramValue}
+          subtitle={ramSubtitle}
+          icon={MemoryStick}
+          trend={metrics && metrics.memory.used / metrics.memory.total > 0.85 ? "down" : "neutral"}
+        />
+        <MetricCard
+          title="Disco"
+          value={diskValue}
+          subtitle={diskSubtitle}
+          icon={HardDrive}
+          trend={metrics && metrics.disk.used / metrics.disk.total > 0.9 ? "down" : "neutral"}
+        />
+        <MetricCard
+          title="Uptime"
+          value={uptimeValue}
+          subtitle="Tiempo activo del servidor"
+          icon={Clock}
+          trend="up"
+        />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
@@ -583,81 +470,375 @@ export default async function DashboardPage() {
 
 ---
 
-### `scripts/create-admin.ts` — Crear usuario admin inicial (CREAR)
+## Parte 4 — Páginas faltantes
 
-```typescript
-import { PrismaClient } from "@prisma/client"
-import bcrypt from "bcryptjs"
+### `src/app/(dashboard)/terminal/page.tsx` — CREAR
 
-const prisma = new PrismaClient()
+```tsx
+import { Terminal } from "lucide-react"
 
-async function main() {
-  const email    = process.env.ADMIN_EMAIL    ?? "admin@tezcapanel.local"
-  const password = process.env.ADMIN_PASSWORD ?? "admin123"
-  const name     = process.env.ADMIN_NAME     ?? "Administrador"
+export default function TerminalPage() {
+  return (
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-xl font-semibold">Terminal</h1>
+        <p className="text-sm text-muted-foreground mt-1">
+          Terminal web en tiempo real
+        </p>
+      </div>
+      <div className="bg-card border border-border rounded-lg p-8 flex flex-col items-center justify-center gap-4 min-h-[300px]">
+        <div className="w-12 h-12 rounded-lg bg-muted border border-border flex items-center justify-center">
+          <Terminal className="w-6 h-6 text-muted-foreground" />
+        </div>
+        <div className="text-center space-y-1">
+          <p className="text-sm font-medium">Terminal interactiva</p>
+          <p className="text-sm text-muted-foreground max-w-sm">
+            Acceso SSH directo desde el navegador. Disponible en próxima versión.
+          </p>
+        </div>
+      </div>
+    </div>
+  )
+}
+```
 
-  const existing = await prisma.user.findUnique({ where: { email } })
-  if (existing) {
-    console.log(`✔ Usuario ${email} ya existe`)
-    return
-  }
+---
 
-  const hashed = await bcrypt.hash(password, 12)
-  const user   = await prisma.user.create({
-    data: { email, password: hashed, name, role: "ADMIN" },
+### `src/app/(dashboard)/users/page.tsx` — CREAR
+
+```tsx
+import { auth } from "@/lib/auth"
+import { prisma } from "@/lib/prisma"
+import { Badge } from "@/components/ui/badge"
+import { Users } from "lucide-react"
+
+export default async function UsersPage() {
+  const session = await auth()
+  const users = await prisma.user.findMany({
+    orderBy: { createdAt: "desc" },
+    select: { id: true, name: true, email: true, role: true, createdAt: true },
   })
 
-  console.log(`✔ Usuario admin creado: ${user.email}`)
-  console.log(`  Email:    ${email}`)
-  console.log(`  Password: ${password}`)
-  console.log(`  ⚠ Cambia la contraseña después del primer login`)
+  return (
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-xl font-semibold">Usuarios</h1>
+        <p className="text-sm text-muted-foreground mt-1">
+          Administra los usuarios con acceso al panel
+        </p>
+      </div>
+
+      <div className="bg-card border border-border rounded-lg overflow-hidden">
+        <div className="px-5 py-4 border-b border-border flex items-center gap-2">
+          <Users className="w-4 h-4 text-muted-foreground" />
+          <span className="text-sm font-medium">Usuarios del panel</span>
+          <Badge variant="secondary" className="ml-auto">{users.length}</Badge>
+        </div>
+        <div className="divide-y divide-border">
+          {users.map((user) => (
+            <div key={user.id} className="px-5 py-3 flex items-center justify-between">
+              <div className="flex flex-col">
+                <span className="text-sm font-medium">{user.name ?? "Sin nombre"}</span>
+                <span className="text-xs text-muted-foreground">{user.email}</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <Badge
+                  variant="outline"
+                  className={
+                    user.email === session?.user?.email
+                      ? "border-primary/50 text-primary text-[10px]"
+                      : "text-[10px]"
+                  }
+                >
+                  {user.role}
+                </Badge>
+                {user.email === session?.user?.email && (
+                  <span className="text-[10px] text-muted-foreground">Tú</span>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+```
+
+---
+
+### `src/app/(dashboard)/settings/page.tsx` — CREAR
+
+```tsx
+import { auth } from "@/lib/auth"
+import { Badge } from "@/components/ui/badge"
+import { Separator } from "@/components/ui/separator"
+
+export default async function SettingsPage() {
+  const session = await auth()
+
+  return (
+    <div className="space-y-6 max-w-2xl">
+      <div>
+        <h1 className="text-xl font-semibold">Configuración</h1>
+        <p className="text-sm text-muted-foreground mt-1">Ajustes del panel y del servidor</p>
+      </div>
+
+      <div className="bg-card border border-border rounded-lg overflow-hidden">
+        <div className="px-5 py-4 border-b border-border">
+          <h2 className="text-sm font-medium">Perfil</h2>
+        </div>
+        <div className="px-5 py-4 space-y-3">
+          <div className="flex justify-between items-center">
+            <span className="text-sm text-muted-foreground">Nombre</span>
+            <span className="text-sm">{session?.user?.name ?? "—"}</span>
+          </div>
+          <Separator />
+          <div className="flex justify-between items-center">
+            <span className="text-sm text-muted-foreground">Email</span>
+            <span className="text-sm">{session?.user?.email ?? "—"}</span>
+          </div>
+          <Separator />
+          <div className="flex justify-between items-center">
+            <span className="text-sm text-muted-foreground">Rol</span>
+            <Badge variant="outline" className="text-[10px]">ADMIN</Badge>
+          </div>
+        </div>
+      </div>
+
+      <div className="bg-card border border-border rounded-lg overflow-hidden">
+        <div className="px-5 py-4 border-b border-border">
+          <h2 className="text-sm font-medium">Plan actual</h2>
+        </div>
+        <div className="px-5 py-4 space-y-3">
+          <div className="flex justify-between items-center">
+            <span className="text-sm text-muted-foreground">Versión</span>
+            <Badge variant="secondary">Community</Badge>
+          </div>
+          <Separator />
+          <div className="flex justify-between items-center">
+            <span className="text-sm text-muted-foreground">Módulos Pro</span>
+            <span className="text-sm text-muted-foreground">No incluidos</span>
+          </div>
+          <p className="text-xs text-muted-foreground pt-1">
+            Actualiza a Pro para desbloquear Correo, DNS, Firewall, Backups y el Asistente IA.
+          </p>
+        </div>
+      </div>
+    </div>
+  )
+}
+```
+
+---
+
+## Parte 5 — ProGate para módulos PRO
+
+### `src/components/dashboard/pro-gate.tsx` — CREAR
+
+```tsx
+import { Badge } from "@/components/ui/badge"
+import { Lock } from "lucide-react"
+
+interface ProGateProps {
+  module: string
+  description?: string
 }
 
-main()
-  .catch(console.error)
-  .finally(() => prisma.$disconnect())
+export function ProGate({ module, description }: ProGateProps) {
+  return (
+    <div className="flex flex-col items-center justify-center min-h-[400px] gap-4">
+      <div className="w-14 h-14 rounded-xl bg-accent/10 border border-accent/20 flex items-center justify-center">
+        <Lock className="w-6 h-6 text-accent" />
+      </div>
+      <div className="text-center space-y-2">
+        <div className="flex items-center justify-center gap-2">
+          <h2 className="text-lg font-semibold">{module}</h2>
+          <Badge variant="outline" className="border-accent/50 text-accent text-[10px]">PRO</Badge>
+        </div>
+        <p className="text-sm text-muted-foreground max-w-sm">
+          {description ?? `El módulo ${module} está disponible en el plan Pro.`}
+        </p>
+      </div>
+      <div className="px-4 py-2 rounded-lg bg-accent/10 border border-accent/20 text-xs text-accent">
+        Próximamente — tezcapanel.io
+      </div>
+    </div>
+  )
+}
 ```
 
-Agregar a `package.json` en la sección `"scripts"`:
+### `src/app/(dashboard)/mail/page.tsx` — REEMPLAZAR
 
-```json
-"create-admin": "tsx scripts/create-admin.ts"
+```tsx
+import { ProGate } from "@/components/dashboard/pro-gate"
+export default function MailPage() {
+  return <ProGate module="Correo electrónico" description="Gestiona cuentas, aliases, DKIM/SPF y cuotas desde el panel." />
+}
 ```
 
-Instalar tsx: `npm install --save-dev tsx`
+### `src/app/(dashboard)/dns/page.tsx` — REEMPLAZAR
+
+```tsx
+import { ProGate } from "@/components/dashboard/pro-gate"
+export default function DnsPage() {
+  return <ProGate module="DNS" description="Administra zonas DNS y registros A, MX, TXT, CNAME con editor visual." />
+}
+```
+
+### `src/app/(dashboard)/firewall/page.tsx` — CREAR
+
+```tsx
+import { ProGate } from "@/components/dashboard/pro-gate"
+export default function FirewallPage() {
+  return <ProGate module="Firewall" description="Configura reglas de firewall y protección contra ataques." />
+}
+```
+
+### `src/app/(dashboard)/backups/page.tsx` — CREAR
+
+```tsx
+import { ProGate } from "@/components/dashboard/pro-gate"
+export default function BackupsPage() {
+  return <ProGate module="Backups" description="Backups automáticos con retención configurable y restauración con un clic." />
+}
+```
+
+---
+
+## Parte 6 — Módulos Community con contenido
+
+### `src/app/(dashboard)/web/page.tsx` — REEMPLAZAR
+
+```tsx
+import { Globe } from "lucide-react"
+import { Badge } from "@/components/ui/badge"
+
+export default function WebPage() {
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-xl font-semibold">Servidor Web</h1>
+          <p className="text-sm text-muted-foreground mt-1">Gestión de sitios, virtual hosts y SSL</p>
+        </div>
+        <Badge variant="secondary" className="text-xs">Commit 4</Badge>
+      </div>
+      <div className="bg-card border border-border rounded-lg p-8 flex flex-col items-center justify-center gap-4 min-h-[300px]">
+        <div className="w-12 h-12 rounded-lg bg-primary/10 border border-primary/20 flex items-center justify-center">
+          <Globe className="w-6 h-6 text-primary" />
+        </div>
+        <div className="text-center space-y-1">
+          <p className="text-sm font-medium">Gestión de sitios web</p>
+          <p className="text-sm text-muted-foreground max-w-sm">
+            Crea virtual hosts para Nginx, Apache u OpenLiteSpeed con SSL automático via Let's Encrypt.
+          </p>
+        </div>
+      </div>
+    </div>
+  )
+}
+```
+
+### `src/app/(dashboard)/databases/page.tsx` — REEMPLAZAR
+
+```tsx
+import { Database } from "lucide-react"
+import { Badge } from "@/components/ui/badge"
+
+export default function DatabasesPage() {
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-xl font-semibold">Bases de datos</h1>
+          <p className="text-sm text-muted-foreground mt-1">MySQL / MariaDB</p>
+        </div>
+        <Badge variant="secondary" className="text-xs">Commit 4</Badge>
+      </div>
+      <div className="bg-card border border-border rounded-lg p-8 flex flex-col items-center justify-center gap-4 min-h-[300px]">
+        <div className="w-12 h-12 rounded-lg bg-primary/10 border border-primary/20 flex items-center justify-center">
+          <Database className="w-6 h-6 text-primary" />
+        </div>
+        <div className="text-center space-y-1">
+          <p className="text-sm font-medium">Gestión de bases de datos</p>
+          <p className="text-sm text-muted-foreground max-w-sm">
+            Crea usuarios y bases de datos MySQL/MariaDB, gestiona permisos y realiza backups con un clic.
+          </p>
+        </div>
+      </div>
+    </div>
+  )
+}
+```
+
+---
+
+## Parte 7 — Sidebar: quitar bloqueo en módulos PRO
+
+### `src/components/layout/sidebar.tsx` — Modificar UNA línea
+
+Buscar esta línea:
+```tsx
+href={item.proOnly ? "#" : item.href}
+```
+
+Reemplazar por:
+```tsx
+href={item.href}
+```
+
+Y quitar el estilo `cursor-not-allowed` del className para que los módulos PRO naveguen
+a su página ProGate en lugar de no hacer nada.
+
+Buscar:
+```tsx
+item.proOnly && "opacity-50 cursor-not-allowed"
+```
+
+Reemplazar por:
+```tsx
+item.proOnly && "opacity-60"
+```
 
 ---
 
 ## Paso final — Verificación y commit
 
 ```bash
-# 1. Dependencias nuevas
-npm install geist
-npm install --save-dev tsx
-
-# 2. Migrar DB si no se hizo antes
-npx prisma migrate dev --name init
-npx prisma generate
-
-# 3. Crear usuario admin
-npm run create-admin
-
-# 4. Verificar sin errores TypeScript
+# 1. Verificar TypeScript sin errores
 npm run build
 
-# 5. Commit
+# 2. Probar en desarrollo con el agente activo
+# Terminal 1 — agente:
+AGENT_TOKEN=tu_token_aqui node agent/server.js
+
+# Terminal 2 — Next.js:
+npm run dev
+
+# 3. Verificar:
+# - /terminal, /users, /settings → no dan 404
+# - /mail, /dns, /firewall, /backups → muestran ProGate
+# - Dashboard → métricas reales si el agente está corriendo
+# - Dashboard → "Agente no disponible" si el agente NO está corriendo (no debe crashear)
+
+# 4. Commit y push
 git add .
-git commit -m "feat: auth system and dashboard layout"
+git commit -m "feat: node agent, real metrics, missing pages and pro gate"
+git push origin main
 ```
 
 ---
 
 ## Notas para el agente
 
-- `next-auth`, `prisma`, `zustand`, `shadcn/ui` ya están instalados del Commit 1. No reinstalar.
-- `globals.css` debe **reemplazarse completamente** — no hacer merge con el anterior.
-- `src/app/layout.tsx` debe **reemplazarse** — el boilerplate de create-next-app ya no sirve.
-- Si `src/lib/utils.ts` fue sobreescrito por shadcn, restaurar la versión del Commit 1 que incluye `formatBytes` y `formatUptime`.
-- Los módulos `web`, `databases`, `mail`, `dns` mantienen sus placeholders — no modificar.
-- Si `MemoryStick` no existe en la versión de lucide-react instalada, usar `Memory` como fallback.
-- El script `create-admin.ts` es solo para desarrollo. En producción el `install.sh` manejará esto.
+- `systeminformation` ya está instalado en el `node_modules` raíz con `npm install systeminformation`.
+  El archivo `agent/server.js` lo importa directamente con `require("systeminformation")`.
+- `src/app/(dashboard)/page.tsx` pasa a `"use client"` porque usa Zustand — es correcto e intencional.
+- El componente `ServicesStatus` original del Commit 2 queda obsoleto. Usar `services-status-live.tsx`.
+  Actualizar cualquier import que lo referencie.
+- Si `MemoryStick` no existe en la versión de lucide-react instalada, usar `Server` como fallback.
+- El agente Node.js es opcional en desarrollo. Si no está corriendo, el dashboard muestra
+  "Conectando..." / "Agente no disponible" sin crashear — esto es comportamiento esperado.
+- `agent/package.json` es solo para documentación — las dependencias del agente van en el
+  `package.json` raíz para simplificar. No ejecutar `npm install` dentro de `/agent`.
