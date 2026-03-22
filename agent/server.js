@@ -52,6 +52,8 @@ const ALLOWED_COMMANDS = [
   /^mkdir -p \/var\/www\/[\w\.\-]+(\/public_html)?$/,
   /^chown -R \$USER:\$USER \/var\/www\/[\w\.\-]+$/,
   /^tee \/etc\/nginx\/sites-available\/[\w\.\-]+$/,
+  /^mysqldump [\w\s\-\.]+ > [\w\/\-\.]+$/,
+  /^mkdir -p \/var\/backups\/tezcapanel$/,
 ]
 
 function isCommandAllowed(command) {
@@ -314,5 +316,6 @@ try {
 
   console.log("✔ Terminal conectada")
 })
+
 
 console.log(`✔ Terminal WebSocket en ws://127.0.0.1:7071`)

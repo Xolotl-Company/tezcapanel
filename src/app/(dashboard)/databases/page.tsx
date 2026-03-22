@@ -68,6 +68,20 @@ export default function DatabasesPage() {
     if (!res.ok) throw new Error(data.error ?? "Error al cambiar contraseña")
   }
 
+  async function handleBackup(id: string, name: string) {  // ← aquí
+  if (!confirm(`¿Crear backup de ${name}?`)) return
+  
+  const res = await fetch(`/api/databases/${id}/backup`, { method: "POST" })
+  const data = await res.json()
+  
+  if (!res.ok) {
+    alert(`Error al crear backup: ${data.error}`)
+    return
+  }
+  
+  alert(`✅ Backup creado: ${data.filename}`)
+}
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -209,14 +223,17 @@ export default function DatabasesPage() {
                       >
                         <KeyRound className="w-3.5 h-3.5" />
                       </Button>
-                      <Button
+
+                     <Button
                         variant="ghost"
                         size="icon"
                         className="w-7 h-7 text-muted-foreground hover:text-primary"
-                        title="Backup"
-                      >
-                        <Archive className="w-3.5 h-3.5" />
-                      </Button>
+                        title="Crear backup"
+                        onClick={() => handleBackup(db.id, db.name)}
+                        >
+                          <Archive className="w-3.5 h-3.5" />
+                        </Button>
+
                       <Button
                         variant="ghost"
                         size="icon"
