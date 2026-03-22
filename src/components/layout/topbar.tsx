@@ -1,5 +1,5 @@
 "use client"
-
+import { NotificationsPanel } from "@/components/layout/notifications-panel"
 import { signOut } from "next-auth/react"
 import { Button } from "@/components/ui/button"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
@@ -29,13 +29,7 @@ export function Topbar({ user }: TopbarProps) {
       </div>
 
       <div className="flex items-center gap-2">
-        <Button
-          variant="ghost"
-          size="icon"
-          className="w-8 h-8 text-muted-foreground hover:text-foreground"
-        >
-          <Bell className="w-4 h-4" />
-        </Button>
+       <NotificationsPanel />
 
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
