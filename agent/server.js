@@ -1,5 +1,8 @@
 const http = require("http")
-const { exec } = require("child_process")  // ← NUEVO
+const { exec } = require("child_process")
+const { WebSocketServer } = require("ws")
+const pty = require("node-pty")
+const os = require("os")
 const si = require("systeminformation")
 
 const PORT = 7070
@@ -11,40 +14,27 @@ if (!TOKEN) {
   process.exit(1)
 }
 
-// --- Lista blanca de comandos permitidos --- NUEVO
+// --- Lista blanca de comandos permitidos ---
 const ALLOWED_COMMANDS = [
-  // Gestión de paquetes
   /^apt(-get)? (install|remove|update|upgrade) -y [\w\s\-\.]+$/,
   /^apt(-get)? install -y [\w\s\-\.]+$/,
   /^yum (install|remove|update) -y [\w\s\-\.]+$/,
   /^dnf (install|remove|update) -y [\w\s\-\.]+$/,
-
-  // Systemctl
   /^systemctl (start|stop|restart|reload|enable|disable|status) [\w\-\.]+$/,
-
-  // Nginx
   /^nginx -t$/,
   /^nginx -s reload$/,
-
-  // MySQL / MariaDB
   /^mysql -e "CREATE DATABASE [\w]+ CHARACTER SET utf8mb4"$/,
   /^mysql -e "CREATE USER '[\w]+'@'localhost' IDENTIFIED BY '[^']+'"$/,
   /^mysql -e "GRANT ALL ON [\w]+\.\* TO '[\w]+'@'localhost'"$/,
   /^mysql -e "FLUSH PRIVILEGES"$/,
   /^mysqldump [\w\s\-\.]+ > [\w\/\-\.]+$/,
-
-  // Certbot / SSL
   /^certbot --nginx -d [\w\.\-]+ --non-interactive --agree-tos -m [\w@\.\-]+$/,
   /^certbot renew --dry-run$/,
   /^certbot renew$/,
-
-  // Archivos de configuración (solo escritura en paths permitidos)
   /^mkdir -p \/etc\/(nginx|apache2|mysql|postfix)\//,
   /^mkdir -p \/var\/www\/[\w\-\.]+$/,
   /^chown -R www-data:www-data \/var\/www\/[\w\-\.]+$/,
   /^chmod -R 755 \/var\/www\/[\w\-\.]+$/,
-
-  // Información del sistema (solo lectura)
   /^cat \/var\/log\/(nginx|apache2|mysql|syslog|auth\.log)(\/[\w\-\.]+)?$/,
   /^tail -n \d+ \/var\/log\/(nginx|apache2|mysql|syslog|auth\.log)(\/[\w\-\.]+)?$/,
   /^df -h$/,
@@ -53,24 +43,14 @@ const ALLOWED_COMMANDS = [
   /^ps aux$/,
   /^netstat -tlnp$/,
   /^ss -tlnp$/,
-
-  // ufw firewall
   /^ufw (enable|disable|status|allow|deny) ?[\w\/]*$/,
-
-  // wget / curl para descargas estándar
   /^wget -O [\w\/\-\.]+ https:\/\/[\w\.\-\/\?=&]+$/,
-
-  // Nginx virtual hosts
   /^cat \/etc\/nginx\/sites-available\/[\w\.\-]+$/,
   /^ln -s \/etc\/nginx\/sites-available\/[\w\.\-]+ \/etc\/nginx\/sites-enabled\/[\w\.\-]+$/,
   /^rm \/etc\/nginx\/sites-enabled\/[\w\.\-]+$/,
   /^ls \/etc\/nginx\/sites-(available|enabled)$/,
-
-  // Crear directorios web
   /^mkdir -p \/var\/www\/[\w\.\-]+(\/public_html)?$/,
   /^chown -R \$USER:\$USER \/var\/www\/[\w\.\-]+$/,
-
-  // Escribir config (via tee)
   /^tee \/etc\/nginx\/sites-available\/[\w\.\-]+$/,
 ]
 
@@ -99,20 +79,17 @@ function executeCommand(command, timeout = 30000) {
   })
 }
 
-// --- Auth helper ---
 function isAuthorized(req) {
   const auth = req.headers["authorization"] ?? ""
   return auth === `Bearer ${TOKEN}`
 }
 
-// --- CORS + JSON headers ---
 function setHeaders(res) {
   res.setHeader("Content-Type", "application/json")
   res.setHeader("Access-Control-Allow-Origin", "http://localhost:3000")
   res.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type")
 }
 
-// --- Handlers ---
 async function handleMetrics(res) {
   const [cpuData, cpuLoad, mem, disk, osInfo] = await Promise.all([
     si.cpu(),
@@ -150,9 +127,7 @@ async function handleMetrics(res) {
 
 async function handleServices(res) {
   const processes = await si.processes()
-  const running = new Set(
-    processes.list.map((p) => p.name.toLowerCase())
-  )
+  const running = new Set(processes.list.map((p) => p.name.toLowerCase()))
 
   const targets = [
     { name: "nginx",   check: "nginx" },
@@ -169,7 +144,6 @@ async function handleServices(res) {
   res.end(JSON.stringify(services))
 }
 
-// --- NUEVO: Execute handler ---
 async function handleExecute(req, res) {
   let body = ""
   req.on("data", (chunk) => { body += chunk })
@@ -237,7 +211,7 @@ async function handleRestartService(name, res) {
   }
 }
 
-// --- Router ---
+// --- Router HTTP ---
 const server = http.createServer(async (req, res) => {
   setHeaders(res)
 
@@ -258,12 +232,12 @@ const server = http.createServer(async (req, res) => {
 
   try {
     if (method === "GET" && url === "/health") {
-      res.end(JSON.stringify({ status: "ok", version: "0.2.0" }))
+      res.end(JSON.stringify({ status: "ok", version: "0.3.0" }))
     } else if (method === "GET" && url === "/metrics") {
       await handleMetrics(res)
     } else if (method === "GET" && url === "/services") {
       await handleServices(res)
-    } else if (method === "POST" && url === "/execute") {   // ← NUEVO
+    } else if (method === "POST" && url === "/execute") {
       await handleExecute(req, res)
     } else if (method === "POST" && url.startsWith("/services/") && url.endsWith("/restart")) {
       const name = url.split("/")[2]
@@ -280,5 +254,65 @@ const server = http.createServer(async (req, res) => {
 })
 
 server.listen(PORT, HOST, () => {
-  console.log(`✔ tezcaagent v0.2.0 escuchando en http://${HOST}:${PORT}`)
+  console.log(`✔ tezcaagent v0.3.0 escuchando en http://${HOST}:${PORT}`)
 })
+
+// --- WebSocket Terminal ---
+const wss = new WebSocketServer({ 
+  port: 7071, 
+  host: "127.0.0.1",
+  verifyClient: (info) => {
+    const origin = info.origin || info.req.headers.origin
+    return !origin || 
+           origin === "http://localhost:3000" ||
+           origin.startsWith("http://192.168.") ||
+           origin.startsWith("http://127.0.0.1")
+  }
+})
+
+wss.on("connection", (ws, req) => {
+  const url = new URL(req.url, "http://localhost")
+  const token = url.searchParams.get("token")
+  if (token !== TOKEN) {
+    ws.close(1008, "Unauthorized")
+    return
+  }
+
+ const shell = process.env.SHELL || "/bin/zsh"
+let ptyProcess
+try {
+  ptyProcess = pty.spawn(shell, [], {
+    name: "xterm-256color",
+    cols: 80,
+    rows: 24,
+    cwd: process.env.HOME || "/tmp",
+    env: { ...process.env, TERM: "xterm-256color", LANG: "en_US.UTF-8" },
+  })
+} catch (err) {
+  console.error("PTY error:", err.message)
+  ws.send("\r\nError al iniciar terminal: " + err.message + "\r\n")
+  ws.close()
+  return
+}
+
+  ptyProcess.onData((data) => {
+    if (ws.readyState === ws.OPEN) ws.send(data)
+  })
+
+  ws.on("message", (data) => {
+    try {
+      const msg = JSON.parse(data.toString())
+      if (msg.type === "input") ptyProcess.write(msg.data)
+      if (msg.type === "resize") ptyProcess.resize(msg.cols, msg.rows)
+    } catch {
+      ptyProcess.write(data.toString())
+    }
+  })
+
+  ws.on("close", () => ptyProcess.kill())
+  ptyProcess.onExit(() => { if (ws.readyState === ws.OPEN) ws.close() })
+
+  console.log("✔ Terminal conectada")
+})
+
+console.log(`✔ Terminal WebSocket en ws://127.0.0.1:7071`)
