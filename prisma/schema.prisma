@@ -25,3 +25,14 @@ model AuditLog {
   metadata  String?
   createdAt DateTime @default(now())
 }
+
+model Website {
+  id         String   @id @default(cuid())
+  domain     String   @unique
+  rootPath   String
+  phpVersion String?
+  ssl        Boolean  @default(false)
+  active     Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
