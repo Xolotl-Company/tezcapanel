@@ -144,10 +144,12 @@ start_service() {
 }
 
 # NGINX
-setup_nginx() {
+ssetup_nginx() {
   log "Configurando NGINX..."
 
-  cat > /etc/nginx/sites-available/tezcapanel <<EOF
+  if [ -d "/etc/nginx/sites-available" ]; then
+    # Debian/Ubuntu
+    cat > /etc/nginx/sites-available/tezcapanel <<EOF
 server {
     listen 80;
     server_name _;
@@ -163,8 +165,27 @@ server {
 }
 EOF
 
-  ln -sf /etc/nginx/sites-available/tezcapanel /etc/nginx/sites-enabled/
-  rm -f /etc/nginx/sites-enabled/default
+    ln -sf /etc/nginx/sites-available/tezcapanel /etc/nginx/sites-enabled/
+    rm -f /etc/nginx/sites-enabled/default
+
+  else
+    # Rocky / AlmaLinux / CentOS
+    cat > /etc/nginx/conf.d/tezcapanel.conf <<EOF
+server {
+    listen 80;
+    server_name _;
+
+    location / {
+        proxy_pass http://localhost:$PORT;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host \$host;
+        proxy_cache_bypass \$http_upgrade;
+    }
+}
+EOF
+  fi
 
   systemctl restart nginx
   systemctl enable nginx
